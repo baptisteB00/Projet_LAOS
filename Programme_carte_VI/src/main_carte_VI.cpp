@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <CAN.h>
+#include "TC74.h"
 
 #define MOYENNE 100 // Définit le nombre d'échantillons pour la moyenne des mesures
 #define NB_POINT 6  // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
@@ -44,6 +45,12 @@ int resolution = 9;    // Résolution PWM : 9 bits = 2^9 = 512 pas (0-511)
 int relais = 18;         // Broche de commande du relais (GPIO 18)
 const int Vpanneau = 32; // Broche d'entrée analogique pour la tension panneau (GPIO 32)
 const int Vcourant = 33; // Broche d'entrée analogique pour le courant (GPIO 33)
+const int BP1 = 25;
+const int BP2 = 26;
+const int BP3 = 27;
+const int BP4 = 14;
+
+int num_carte = 0; // variable pour stocker le numero de carte
 
 // --- Variables globales pour les mesures ---
 float voltage_Vcourant = 0; // Variable pour stocker la tension liée au courant
@@ -51,6 +58,9 @@ float voltage_Vpanneau = 0; // Variable pour stocker la tension du panneau
 
 void onReceive(int packetSize);
 
+TC74 dvc(0x48); // A5 Address, also default
+
+void mesure_temperature();
 
 void setup()
 {
@@ -60,6 +70,12 @@ void setup()
     Serial.printf("can marche pas \n");
     while (1)
       ;
+  }
+  dvc.begin();
+  while (dvc.isStandby())
+  { // wait until the sensor is ready
+    Serial.println("La loose");
+    delay(3000);
   }
   Serial.println("carte VI");
   pinMode(19, OUTPUT); // Définit la broche 19 (GPIO 19) comme sortie pour le PWM
@@ -72,6 +88,18 @@ void setup()
   // Configuration du relais
   pinMode(relais, OUTPUT);   // Définit la broche du relais comme sortie
   digitalWrite(relais, LOW); // Met le relais à l'état BAS (supposé "ouvert" / "off")
+
+  //configuration du numero de carte
+  pinMode(BP1, INPUT);
+  pinMode(BP2, INPUT);
+  pinMode(BP3, INPUT);
+  pinMode(BP4, INPUT);
+
+  num_carte = digitalRead(BP1) | (digitalRead(BP2) << 1) | (digitalRead(BP3) << 2) | (digitalRead(BP4) << 3);
+  Serial.printf("Numero de carte : %d\n", num_carte);
+
+
+
 
   CAN.onReceive(onReceive);
 }
@@ -101,9 +129,9 @@ void mesureVI(float alpha)
     voltage_Vpanneau += analogReadMilliVolts(Vpanneau);
   }
 
-  voltage_Vcourant = voltage_Vcourant / (float) MOYENNE * 4 / 1319.0f;
-  voltage_Vpanneau = voltage_Vpanneau / (float) MOYENNE * 22 / 1954.0f;
-  
+  voltage_Vcourant = voltage_Vcourant / MOYENNE * 4 / 1319.0f;
+  voltage_Vpanneau = voltage_Vpanneau / MOYENNE * 22 / 1954.0f;
+  /*
     Serial.println(); // Saut de ligne pour la lisibilité
 
     // Affiche les moyennes (Valeur totale / nombre d'échantillons)
@@ -111,7 +139,7 @@ void mesureVI(float alpha)
     Serial.println(voltage_Vpanneau);
     Serial.print("Vcourant ");
     Serial.println(voltage_Vcourant);
-  
+  */
   // 5. Ouvrir les relais
   digitalWrite(relais, LOW); // Met le relais à l'état BAS ("ouvert" / "off")
 }
@@ -196,6 +224,7 @@ void mesure_VI_All()
     CAN.write((unsigned char)((int)(couple_VI2[i].tension * 100.0) % 256));
     CAN.write((unsigned char)(((int)(couple_VI2[i].courant * 100.0) / 256) % 256));
     CAN.write((unsigned char)((int)(couple_VI2[i].courant * 100.0) % 256));
+    CAN.write((unsigned char)num_carte);
     CAN.endPacket();
     delay(10); // petit delai pour laisser le temps au recepteur de traiter
   }
@@ -240,6 +269,8 @@ void reception(char ch)
     else if (commande == "A")
     {
       mesure_VI_All();
+    }else if (commande == "T"){
+      mesure_temperature();
     }
 
     chaine = ""; // Réinitialise le buffer pour la prochaine commande
@@ -255,19 +286,19 @@ void loop()
 {
   if (canAvailable == true)
   {
-    switch (rxMsg.id)
+    if ((rxMsg.id == (11) )&& (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
     {
-    case 11:
       mesure_VI_All();
-      break;
-    case 0:
-      
-      break;
-      
-    default:
-      break;
+    }else if ((rxMsg.id == (12) )&& (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
+    {
+      mesure_temperature();
+      Serial.println("reçu");
+    }else if(rxMsg.id == (0)){
+      delay(num_carte*10);
+      CAN.beginPacket(10);
+      CAN.write(num_carte);
+      CAN.endPacket();
     }
-
     canAvailable = false;
   }
 }
@@ -291,4 +322,18 @@ void onReceive(int packetSize)
     i++;
   }
   canAvailable = true;
+}
+
+
+void mesure_temperature(){
+
+  int temp_c = dvc.readTemperature('c');
+
+  Serial.printf("Temperature : %2.2f °C\n", temp_c);
+
+  CAN.beginPacket(18);
+  CAN.write((unsigned char) temp_c % 2);
+  CAN.write((unsigned char)temp_c);
+  CAN.write((unsigned char)num_carte);
+  CAN.endPacket();
 }
