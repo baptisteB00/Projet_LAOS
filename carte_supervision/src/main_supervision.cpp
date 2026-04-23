@@ -38,12 +38,13 @@ void setup()
 
 void loop()
 {
-  float tension = 0.0;
-  float courant = 0.0;
-  float humidite = 0.0;
-  float temperature = 0.0;
-  float irradiance = 0.0;
-
+  float tension = 0.0f;
+  float courant = 0.0f;
+  float humidite = 0.0f;
+  float temperature_ext = 0.0f;
+  float irradiance = 0.0f;
+  int numero_carte = 0;
+  int temperature_panneau = 0;
   if (canAvailable == true)
   {
     switch (rxMsg.id)
@@ -57,53 +58,61 @@ void loop()
       Serial.println("99");
       break;
 
-    case 19:
-      tension = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100;
-      courant = (rxMsg.data[2] * 256 + rxMsg.data[3]) / 100;
-      Serial.printf(" %d;%.2f;%.2f", rxMsg.data[4], tension, courant);
-      Serial.println();
+    case 18:
+      temperature_panneau = rxMsg.data[1];
+      numero_carte = rxMsg.data[2];
+      Serial.printf("%2d;%d",numero_carte,temperature_panneau);
+      break;
+    
+      case 19:
+      tension = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
+      courant = (rxMsg.data[2] * 256 + rxMsg.data[3]) / 100.0f;
+      numero_carte = rxMsg.data[4];
+      Serial.printf(" %d;%.2f;%.2f\n\r", numero_carte, tension, courant);
+      Serial.println(); 
 
       break;
 
     case 42:
-      humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100;
+      humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       Serial.printf("11;%.2f", humidite);
       Serial.println();
 
       break;
 
     case 43:
-      temperature = (rxMsg.data[1] * 256 + rxMsg.data[2]) / 100;
-      if (rxMsg.data[0] < 0)
+      temperature_ext = (rxMsg.data[1] * 256 + rxMsg.data[2]) / 100.0f;
+      if (rxMsg.data[0] == 0)
       {
-        temperature = -temperature;
+        temperature_ext = -temperature_ext;
       }
-      Serial.printf("12;%.2f", temperature);
+      Serial.printf("12;%.2f", temperature_ext);
       Serial.println();
 
       break;
 
     case 44:
-      irradiance = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100;
+      irradiance = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       Serial.printf("13;%.2f", irradiance);
       Serial.println();
 
       break;
 
     case 45:
-      humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100;
-      temperature = (rxMsg.data[3] * 256 + rxMsg.data[4]) / 100;
+      humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
+      temperature_ext = (rxMsg.data[3] * 256 + rxMsg.data[4]) / 100.0f;
       if (rxMsg.data[2] < 0)
       {
-        temperature = -temperature;
+        temperature_ext = -temperature_ext;
       }
-      irradiance = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100;
+      irradiance = (rxMsg.data[5] * 256 + rxMsg.data[6]) / 100.0f;
 
-      Serial.printf("10;%.2f;%.2f;%.2f", humidite, temperature, irradiance);
+      Serial.printf("10;%.2f;%.2f;%.2f", humidite, temperature_ext, irradiance);
       Serial.println();
 
       break;
     }
+    /*
     printf("ID  = %d\n", rxMsg.id);
     printf("Len = %d\n", rxMsg.len);
     if (rxMsg.len > 0)
@@ -115,7 +124,7 @@ void loop()
         Serial.print(" ");
       }
       Serial.println();
-    }
+    }*/
     canAvailable = false;
   }
 }
@@ -133,7 +142,6 @@ void onReceive(int packetSize)
   canAvailable = true;
 }
 
-
 void serialEvent()
 {
   while (Serial.available() > 0) // tant qu'il y a des caractères à lire
@@ -141,7 +149,6 @@ void serialEvent()
     reception(Serial.read());
   }
 }
-
 
 void reception(char ch)
 {
@@ -172,35 +179,24 @@ void reception(char ch)
       CAN.beginPacket(1);
       CAN.write(valeur.toInt());
       CAN.endPacket();
-    }else if (commande == "M")
+    }
+    else if (commande == "M")
     {
       CAN.beginPacket(5);
       CAN.endPacket();
     }
     else if (commande == "VI")
     {
-      if((valeur.toInt()) == 1)
-      {
-        CAN.beginPacket(11);
-      }
-      else if ((valeur.toInt()) == 2)
-      {
-        CAN.beginPacket(12);
-      }
-      else if ((valeur.toInt()) == 3)
-      {
-        CAN.beginPacket(13);
-      }
-      else if (valeur.toInt() == 4)
-      {
-        CAN.beginPacket(14);
-      }
-      else if (valeur.toInt() == 5)
-      {
-        CAN.beginPacket(15);
-      }
+      CAN.beginPacket(11);
+      CAN.write(valeur.toInt());    
+      CAN.endPacket();
+    }else if (commande == "T")
+    {
+      CAN.beginPacket(12);
+      CAN.write(valeur.toInt());    
       CAN.endPacket();
     }
+    
     {
       CAN.beginPacket(6);
       CAN.endPacket();

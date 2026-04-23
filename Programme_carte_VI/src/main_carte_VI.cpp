@@ -1,0 +1,294 @@
+/*-------------------------------------------------------------------------------------------
+- Description générale (Objectif du programme) :
+- attente reception commande liaison serie M XXX où XXX est le rapport cyclique en %
+- Apres recpetion
+     - fixer la PWM
+     - fermer les relais
+     - mesurer I et U
+     - ouvrir les relais
+---------------------------------------------------------------------------------------------*/
+
+#include <Arduino.h>
+#include <CAN.h>
+
+#define MOYENNE 100 // Définit le nombre d'échantillons pour la moyenne des mesures
+#define NB_POINT 6  // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
+#define R_mesure 22 // definit la valeur de la resistance de mesure
+
+typedef struct CANMessage
+{
+  unsigned int id = 0;
+  char len = 0;
+  unsigned char data[8] = {0};
+} CANMessage;
+
+CANMessage rxMsg;
+bool canAvailable = false;
+
+struct point_de_mesure
+{
+  float tension;
+  float courant;
+  float alpha;
+};
+
+point_de_mesure couple_VI2[NB_POINT * 2 + 3]; // tableau des points de mesures
+
+float Icc, V0, Imin;
+// --- Configuration PWM ---
+int frequence = 50000; // Fréquence du signal PWM (50 kHz)
+int canal = 0;         // Canal PWM (l'ESP32 en a 16)
+int resolution = 9;    // Résolution PWM : 9 bits = 2^9 = 512 pas (0-511)
+
+// --- Assignation des broches (Pins) ---
+int relais = 18;         // Broche de commande du relais (GPIO 18)
+const int Vpanneau = 32; // Broche d'entrée analogique pour la tension panneau (GPIO 32)
+const int Vcourant = 33; // Broche d'entrée analogique pour le courant (GPIO 33)
+
+// --- Variables globales pour les mesures ---
+float voltage_Vcourant = 0; // Variable pour stocker la tension liée au courant
+float voltage_Vpanneau = 0; // Variable pour stocker la tension du panneau
+
+void onReceive(int packetSize);
+
+
+void setup()
+{
+  Serial.begin(115200); // Initialisation de la communication série (moniteur)
+  if (!CAN.begin(10E3))
+  {
+    Serial.printf("can marche pas \n");
+    while (1)
+      ;
+  }
+  Serial.println("carte VI");
+  pinMode(19, OUTPUT); // Définit la broche 19 (GPIO 19) comme sortie pour le PWM
+
+  // Configuration du "LEDC" (Contrôleur PWM de l'ESP32)
+  ledcSetup(canal, frequence, resolution); // Configure le canal 0 avec la fréquence et la résolution définies
+  ledcAttachPin(19, canal);                // Attache la broche 19 au canal PWM 0
+  ledcWrite(canal, 0);                     // Applique un rapport cyclique initial (255 sur 511, soit ~50%)
+
+  // Configuration du relais
+  pinMode(relais, OUTPUT);   // Définit la broche du relais comme sortie
+  digitalWrite(relais, LOW); // Met le relais à l'état BAS (supposé "ouvert" / "off")
+
+  CAN.onReceive(onReceive);
+}
+
+void mesureVI(float alpha)
+{
+  int i; // Compteur de boucle
+
+  // 1. Fermer le relais
+  digitalWrite(relais, HIGH); // Met le relais à l'état HAUT (supposé "fermé" / "on")
+
+  // 2. Fixer la PWM
+  // Convertit le pourcentage 'alpha' (0-100) en valeur 9 bits (0-511)
+  ledcWrite(canal, (int)(alpha / 100.0 * 512));
+
+  // 3. Attente de stabilisation
+  delay(100); // Pause de 1 seconde pour laisser le circuit se stabiliser
+
+  // 4. Mesurer I et U
+  voltage_Vcourant = 0; // Réinitialise les accumulateurs de mesure
+  voltage_Vpanneau = 0;
+
+  for (i = 0; i < MOYENNE; i++) // Boucle pour faire la moyenne
+  {
+    // Lit les valeurs analogiques en millivolts et les ajoute au total
+    voltage_Vcourant += analogReadMilliVolts(Vcourant);
+    voltage_Vpanneau += analogReadMilliVolts(Vpanneau);
+  }
+
+  voltage_Vcourant = voltage_Vcourant / (float) MOYENNE * 4 / 1319.0f;
+  voltage_Vpanneau = voltage_Vpanneau / (float) MOYENNE * 22 / 1954.0f;
+  
+    Serial.println(); // Saut de ligne pour la lisibilité
+
+    // Affiche les moyennes (Valeur totale / nombre d'échantillons)
+    Serial.print("Vpanneau ");
+    Serial.println(voltage_Vpanneau);
+    Serial.print("Vcourant ");
+    Serial.println(voltage_Vcourant);
+  
+  // 5. Ouvrir les relais
+  digitalWrite(relais, LOW); // Met le relais à l'état BAS ("ouvert" / "off")
+}
+
+void mesure_VI_All()
+{
+
+  mesureVI(100); // mesure de Icc
+  Icc = voltage_Vcourant;
+
+  mesureVI(0); // mesure de V0 et Imin
+  V0 = voltage_Vpanneau;
+  Imin = voltage_Vcourant;
+
+  float plage_courant = Icc - Imin;
+
+  Serial.printf("Icc = %2.2f, Imin = %2.2f , V0 = %2.2f\n", Icc, Imin, V0);
+
+  // calculs des points de mesures
+  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  {
+    if (i < NB_POINT) // point a Icc constant
+    {
+      couple_VI2[i].courant = Icc;
+      couple_VI2[i].tension = (V0 / (NB_POINT + 1.0)) * (i + 1);
+    }
+    else if (i == NB_POINT) // point a Icc constant et V0 constant
+    {
+      couple_VI2[i].courant = Icc;
+      couple_VI2[i].tension = V0;
+    }
+    else // point a V0 constant
+    {
+      int j = i - (NB_POINT + 1);
+      couple_VI2[i].tension = V0;
+      couple_VI2[i].courant = ((plage_courant / (NB_POINT + 1.0)) * (j + 1)) + Imin;
+    }
+  }
+  // point supplementaire pour Imin et V0
+  couple_VI2[NB_POINT * 2 + 1].courant = Imin;
+  couple_VI2[NB_POINT * 2 + 1].tension = V0;
+  couple_VI2[NB_POINT * 2 + 2].courant = Icc;
+  couple_VI2[NB_POINT * 2 + 2].tension = 0;
+
+  // calculs de alpha
+  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  {
+    float R_eq = couple_VI2[i].tension / couple_VI2[i].courant;
+    couple_VI2[i].alpha = (1.0 - (R_eq / R_mesure)) * 100;
+  }
+
+  // mesures effectives
+  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  {
+    mesureVI(couple_VI2[i].alpha);
+    couple_VI2[i].tension = voltage_Vpanneau;
+    couple_VI2[i].courant = voltage_Vcourant;
+  }
+
+  // print a CSV file
+
+  Serial.printf("tension,courant\n");
+
+  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  {
+    Serial.printf("%.2f,%.2f\n", couple_VI2[i].tension, couple_VI2[i].courant);
+  }
+  // point supplementaire pour Imin et V0
+  Serial.printf("%.2f,%.2f\n", couple_VI2[NB_POINT * 2 + 1].tension, couple_VI2[NB_POINT * 2 + 1].courant);
+  // point supplementaire pour Icc et 0V
+  Serial.printf("%.2f,%.2f\n", couple_VI2[NB_POINT * 2 + 2].tension, couple_VI2[NB_POINT * 2 + 2].courant);
+
+  // envoie des message CAN
+  //trame de debut de message
+  CAN.beginPacket(7);
+  CAN.endPacket();
+  //contenue du message
+  for (int i = 0; i < NB_POINT * 2 + 3; i++)
+  {
+    CAN.beginPacket(19);
+    CAN.write((unsigned char)(((int)(couple_VI2[i].tension * 100.0) / 256) % 256));
+    CAN.write((unsigned char)((int)(couple_VI2[i].tension * 100.0) % 256));
+    CAN.write((unsigned char)(((int)(couple_VI2[i].courant * 100.0) / 256) % 256));
+    CAN.write((unsigned char)((int)(couple_VI2[i].courant * 100.0) % 256));
+    CAN.endPacket();
+    delay(10); // petit delai pour laisser le temps au recepteur de traiter
+  }
+
+  CAN.beginPacket(8);
+  CAN.endPacket();
+}
+
+void reception(char ch)
+{
+  static int i = 0;          // Variable statique 'i' déclarée mais non utilisée ici.
+  static String chaine = ""; // Buffer statique pour accumuler les caractères
+  String commande;
+  String valeur;
+  int index, length;
+
+  // Vérifie si le caractère est une fin de ligne (Entrée)
+  if ((ch == 13) or (ch == 10))
+  {
+    // Une commande complète a été reçue
+
+    index = chaine.indexOf(' '); // Trouve la position de l'espace
+    length = chaine.length();    // Longueur totale de la chaîne
+
+    if (index == -1) // Pas d'espace trouvé
+    {
+      commande = chaine; // La chaîne entière est la commande
+      valeur = "";       // Pas de valeur
+    }
+    else // Espace trouvé
+    {
+      commande = chaine.substring(0, index);        // Extrait la commande (ex: "M")
+      valeur = chaine.substring(index + 1, length); // Extrait la valeur (ex: "50")
+    }
+
+    // Traitement de la commande
+    if (commande == "M")
+    {
+      // Si la commande est "M", lance une mesure VI
+      mesureVI(valeur.toInt()); // Convertit la valeur en entier et appelle la fonction
+    }
+    else if (commande == "A")
+    {
+      mesure_VI_All();
+    }
+
+    chaine = ""; // Réinitialise le buffer pour la prochaine commande
+  }
+  else
+  {
+    // Ce n'est pas une fin de ligne, on ajoute le caractère au buffer
+    chaine += ch;
+  }
+}
+
+void loop()
+{
+  if (canAvailable == true)
+  {
+    switch (rxMsg.id)
+    {
+    case 11:
+      mesure_VI_All();
+      break;
+    case 0:
+      
+      break;
+      
+    default:
+      break;
+    }
+
+    canAvailable = false;
+  }
+}
+
+void serialEvent()
+{
+  while (Serial.available() > 0) // Tant qu'il y a des caractères à lire
+  {
+    reception(Serial.read()); // Lit un caractère et l'envoie à notre fonction "reception"
+  }
+}
+
+void onReceive(int packetSize)
+{
+  rxMsg.id = CAN.packetId();
+  rxMsg.len = CAN.packetDlc();
+  int i = 0;
+  while (CAN.available())
+  {
+    rxMsg.data[i] = CAN.read();
+    i++;
+  }
+  canAvailable = true;
+}
