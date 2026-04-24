@@ -11,10 +11,14 @@
 #include <Arduino.h>
 #include <CAN.h>
 #include "TC74.h"
+#include "math.h"
 
 #define MOYENNE 100 // Définit le nombre d'échantillons pour la moyenne des mesures
-#define NB_POINT 6  // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
 #define R_mesure 22 // definit la valeur de la resistance de mesure
+
+#define NB_POINT_Icc_CONST 8
+#define NB_POINT_V0_CONST 15
+#define NB_POINT NB_POINT_Icc_CONST + NB_POINT_V0_CONST // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
 
 typedef struct CANMessage
 {
@@ -33,9 +37,9 @@ struct point_de_mesure
   float alpha;
 };
 
-point_de_mesure couple_VI2[NB_POINT * 2 + 3]; // tableau des points de mesures
+point_de_mesure couple_VI2[NB_POINT]; // tableau des points de mesures
 
-float Icc, V0, Imin;
+float Icc, V0, Imin, Vmin;
 // --- Configuration PWM ---
 int frequence = 50000; // Fréquence du signal PWM (50 kHz)
 int canal = 0;         // Canal PWM (l'ESP32 en a 16)
@@ -89,7 +93,7 @@ void setup()
   pinMode(relais, OUTPUT);   // Définit la broche du relais comme sortie
   digitalWrite(relais, LOW); // Met le relais à l'état BAS (supposé "ouvert" / "off")
 
-  //configuration du numero de carte
+  // configuration du numero de carte
   pinMode(BP1, INPUT);
   pinMode(BP2, INPUT);
   pinMode(BP3, INPUT);
@@ -97,9 +101,6 @@ void setup()
 
   num_carte = digitalRead(BP1) | (digitalRead(BP2) << 1) | (digitalRead(BP3) << 2) | (digitalRead(BP4) << 3);
   Serial.printf("Numero de carte : %d\n", num_carte);
-
-
-
 
   CAN.onReceive(onReceive);
 }
@@ -142,57 +143,48 @@ void mesureVI(float alpha)
   */
   // 5. Ouvrir les relais
   digitalWrite(relais, LOW); // Met le relais à l'état BAS ("ouvert" / "off")
+  
 }
+
 
 void mesure_VI_All()
 {
-
-  mesureVI(100); // mesure de Icc
+  mesureVI(100); // mesure de Icc ET Vmin
   Icc = voltage_Vcourant;
+  Vmin = voltage_Vpanneau;
 
   mesureVI(0); // mesure de V0 et Imin
   V0 = voltage_Vpanneau;
   Imin = voltage_Vcourant;
 
-  float plage_courant = Icc - Imin;
-
-  Serial.printf("Icc = %2.2f, Imin = %2.2f , V0 = %2.2f\n", Icc, Imin, V0);
+  Serial.printf("Icc = %2.2f, Imin = %2.2f , V0 = %2.2f ,Vmin = %2.2f\n", Icc, Imin, V0, Vmin);
 
   // calculs des points de mesures
-  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  for (int i = 0; i < NB_POINT; i++)
   {
-    if (i < NB_POINT) // point a Icc constant
+    if (i < NB_POINT_V0_CONST)
     {
-      couple_VI2[i].courant = Icc;
-      couple_VI2[i].tension = (V0 / (NB_POINT + 1.0)) * (i + 1);
-    }
-    else if (i == NB_POINT) // point a Icc constant et V0 constant
-    {
-      couple_VI2[i].courant = Icc;
       couple_VI2[i].tension = V0;
+      couple_VI2[i].courant = Imin + (Icc - Imin) * log10(1 + ((i) * 9) / (float) (NB_POINT_V0_CONST - 1));
     }
-    else // point a V0 constant
+    else
     {
-      int j = i - (NB_POINT + 1);
-      couple_VI2[i].tension = V0;
-      couple_VI2[i].courant = ((plage_courant / (NB_POINT + 1.0)) * (j + 1)) + Imin;
+
+      couple_VI2[i].tension = Vmin + (V0 - Vmin) *  log10(1 + ((i-NB_POINT_V0_CONST) * 9) / (float) (NB_POINT_Icc_CONST - 1));
+      couple_VI2[i].courant = Icc;
     }
+    Serial.printf("point %d : I = %2.2f, V = %2.2f\n", i, couple_VI2[i].courant, couple_VI2[i].tension);
   }
-  // point supplementaire pour Imin et V0
-  couple_VI2[NB_POINT * 2 + 1].courant = Imin;
-  couple_VI2[NB_POINT * 2 + 1].tension = V0;
-  couple_VI2[NB_POINT * 2 + 2].courant = Icc;
-  couple_VI2[NB_POINT * 2 + 2].tension = 0;
 
   // calculs de alpha
-  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  for (int i = 0; i < NB_POINT; i++)
   {
     float R_eq = couple_VI2[i].tension / couple_VI2[i].courant;
     couple_VI2[i].alpha = (1.0 - (R_eq / R_mesure)) * 100;
   }
 
   // mesures effectives
-  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  for (int i = 0; i < NB_POINT; i++)
   {
     mesureVI(couple_VI2[i].alpha);
     couple_VI2[i].tension = voltage_Vpanneau;
@@ -201,23 +193,19 @@ void mesure_VI_All()
 
   // print a CSV file
 
-  Serial.printf("tension,courant\n");
+  Serial.printf("tension,courant,alpha\n");
 
-  for (int i = 0; i < NB_POINT * 2 + 1; i++)
+  for (int i = 0; i < NB_POINT; i++)
   {
-    Serial.printf("%.2f,%.2f\n", couple_VI2[i].tension, couple_VI2[i].courant);
+    Serial.printf("%.2f,%.2f,%2.2f\n", couple_VI2[i].tension, couple_VI2[i].courant, couple_VI2[i].alpha);
   }
-  // point supplementaire pour Imin et V0
-  Serial.printf("%.2f,%.2f\n", couple_VI2[NB_POINT * 2 + 1].tension, couple_VI2[NB_POINT * 2 + 1].courant);
-  // point supplementaire pour Icc et 0V
-  Serial.printf("%.2f,%.2f\n", couple_VI2[NB_POINT * 2 + 2].tension, couple_VI2[NB_POINT * 2 + 2].courant);
 
   // envoie des message CAN
-  //trame de debut de message
+  // trame de debut de message
   CAN.beginPacket(7);
   CAN.endPacket();
-  //contenue du message
-  for (int i = 0; i < NB_POINT * 2 + 3; i++)
+  // contenue du message
+  for (int i = 0; i < NB_POINT; i++)
   {
     CAN.beginPacket(19);
     CAN.write((unsigned char)(((int)(couple_VI2[i].tension * 100.0) / 256) % 256));
@@ -269,7 +257,9 @@ void reception(char ch)
     else if (commande == "A")
     {
       mesure_VI_All();
-    }else if (commande == "T"){
+    }
+    else if (commande == "T")
+    {
       mesure_temperature();
     }
 
@@ -286,15 +276,18 @@ void loop()
 {
   if (canAvailable == true)
   {
-    if ((rxMsg.id == (11) )&& (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
+    if ((rxMsg.id == (11)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
     {
       mesure_VI_All();
-    }else if ((rxMsg.id == (12) )&& (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
+    }
+    else if ((rxMsg.id == (12)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
     {
       mesure_temperature();
       Serial.println("reçu");
-    }else if(rxMsg.id == (0)){
-      delay(num_carte*10);
+    }
+    else if (rxMsg.id == (0))
+    {
+      delay(num_carte * 10);
       CAN.beginPacket(10);
       CAN.write(num_carte);
       CAN.endPacket();
@@ -324,15 +317,15 @@ void onReceive(int packetSize)
   canAvailable = true;
 }
 
-
-void mesure_temperature(){
+void mesure_temperature()
+{
 
   int temp_c = dvc.readTemperature('c');
 
   Serial.printf("Temperature : %2.2f °C\n", temp_c);
 
   CAN.beginPacket(18);
-  CAN.write((unsigned char) temp_c % 2);
+  CAN.write((unsigned char)temp_c % 2);
   CAN.write((unsigned char)temp_c);
   CAN.write((unsigned char)num_carte);
   CAN.endPacket();
