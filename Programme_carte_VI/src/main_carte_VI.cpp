@@ -37,6 +37,8 @@ struct point_de_mesure
   float alpha;
 };
 
+
+
 point_de_mesure couple_VI2[NB_POINT]; // tableau des points de mesures
 
 float Icc, V0, Imin, Vmin;
@@ -132,15 +134,7 @@ void mesureVI(float alpha)
 
   voltage_Vcourant = voltage_Vcourant / MOYENNE * 4 / 1319.0f;
   voltage_Vpanneau = voltage_Vpanneau / MOYENNE * 22 / 1954.0f;
-  /*
-    Serial.println(); // Saut de ligne pour la lisibilité
 
-    // Affiche les moyennes (Valeur totale / nombre d'échantillons)
-    Serial.print("Vpanneau ");
-    Serial.println(voltage_Vpanneau);
-    Serial.print("Vcourant ");
-    Serial.println(voltage_Vcourant);
-  */
   // 5. Ouvrir les relais
   digitalWrite(relais, LOW); // Met le relais à l'état BAS ("ouvert" / "off")
   
@@ -330,3 +324,5 @@ void mesure_temperature()
   CAN.write((unsigned char)num_carte);
   CAN.endPacket();
 }
+
+
