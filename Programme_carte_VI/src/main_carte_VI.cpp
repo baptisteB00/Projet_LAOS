@@ -18,7 +18,7 @@
 
 #define NB_POINT_Icc_CONST 8
 #define NB_POINT_V0_CONST 15
-#define NB_POINT NB_POINT_Icc_CONST + NB_POINT_V0_CONST // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
+#define NB_POINT NB_POINT_Icc_CONST + NB_POINT_V0_CONST 
 
 typedef struct CANMessage
 {
@@ -61,10 +61,9 @@ float voltage_Vcourant = 0; // Variable pour stocker la tension liée au courant
 float voltage_Vpanneau = 0; // Variable pour stocker la tension du panneau
 
 void onReceive(int packetSize);
+void mesure_temperature_TC74();
 
 TC74 dvc(0x48); // A5 Address, also default
-
-void mesure_temperature();
 
 void setup()
 {
@@ -104,6 +103,11 @@ void setup()
 
   CAN.onReceive(onReceive);
 }
+
+/*****************************************************************/
+/// @brief Mesure de I et V pour un rapport cyclique donné
+/// @param alpha : rapport cyclique en pourcentage (0-100)
+/*****************************************************************/
 
 void mesureVI(float alpha)
 {
@@ -146,6 +150,9 @@ void mesureVI(float alpha)
   
 }
 
+/*****************************************************************/
+/// @brief Mesure de la caracteristique VI avec un algorithme de repartition logarithmique
+/*****************************************************************/
 
 void mesure_VI_All()
 {
@@ -221,6 +228,9 @@ void mesure_VI_All()
   CAN.endPacket();
 }
 
+///@brief fonction de traitement appeler par la callback de la liaison serie
+///@param ch : le charactere recus en format uint8
+
 void reception(char ch)
 {
   static int i = 0;          // Variable statique 'i' déclarée mais non utilisée ici.
@@ -260,7 +270,7 @@ void reception(char ch)
     }
     else if (commande == "T")
     {
-      mesure_temperature();
+      mesure_temperature_TC74();
     }
 
     chaine = ""; // Réinitialise le buffer pour la prochaine commande
@@ -282,7 +292,7 @@ void loop()
     }
     else if ((rxMsg.id == (12)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
     {
-      mesure_temperature();
+      mesure_temperature_TC74();
       Serial.println("reçu");
     }
     else if (rxMsg.id == (0))
@@ -304,6 +314,9 @@ void serialEvent()
   }
 }
 
+/// @brief fonction de callback du bus CAN
+/// @param packetSize : sert a rien dans ce cas la 
+
 void onReceive(int packetSize)
 {
   rxMsg.id = CAN.packetId();
@@ -317,7 +330,9 @@ void onReceive(int packetSize)
   canAvailable = true;
 }
 
-void mesure_temperature()
+
+/// @brief  fonction de mesure de la temperature grace au capteur 
+void mesure_temperature_TC74()
 {
 
   int temp_c = dvc.readTemperature('c');
