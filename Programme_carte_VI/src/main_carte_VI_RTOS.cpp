@@ -1,36 +1,12 @@
-#include <Arduino.h>
-#include <CAN.h>
-#include "TC74.h"
-#include "math.h"
+#include "main_carte_VI_RTOS.h"
 
-#define PIN_RELAIS 18
-#define PIN_LECTURE_TENSION 32
-#define PIN_LECTURE_COURANT 33
-
-#define FREQUENCE 50000 // Fréquence du signal PWM (50 kHz)
-#define CANAL 0         // Canal PWM (l'ESP32 en a 16)
-#define RESOLUTION 9    // Résolution PWM : 9 bits = 2^9 = 512 pas (0-511)
-#define MOYENNE 100     // Définit le nombre d'échantillons pour la moyenne des mesures
-#define R_mesure 22     // definit la valeur de la resistance de mesure
-
-#define NB_POINT_Icc_CONST 8
-#define NB_POINT_V0_CONST 15
-#define NB_POINT NB_POINT_Icc_CONST + NB_POINT_V0_CONST // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
-
-#define BIT_0 (1<<0)
-
-EventGroupHandle_t xFlagsMessageCan;
+EventGroupHandle_t xFlagsSystemeEvent;
+EventGroupHandle_t xFlagsMessageSerial;
+SemaphoreHandle_t xMutexSerialLink;
+SemaphoreHandle_t xMutexCanLink;
+QueueHandle_t xBalTxCanMsg;
 
 char num_carte = 0;
-
-void onReceive(int packetSize);
-
-struct point_de_mesure
-{
-    float tension;
-    float courant;
-    float alpha;
-};
 
 void setup()
 {
@@ -42,23 +18,32 @@ void setup()
             ;
     }
 
-    CAN.onReceive(onReceive);
+    pinMode(PIN_SWITCH_BP1, INPUT);
+    pinMode(PIN_SWITCH_BP2, INPUT);
+    pinMode(PIN_SWITCH_BP3, INPUT);
+    pinMode(PIN_SWITCH_BP4, INPUT);
 
-    xFlagsMessageCan= xEventGroupCreate();
+    num_carte = digitalRead(PIN_SWITCH_BP1) | (digitalRead(PIN_SWITCH_BP2) << 1) | (digitalRead(PIN_SWITCH_BP3) << 2) | (digitalRead(PIN_SWITCH_BP4) << 3);
+    Serial.printf("Numero de carte : %d\n", num_carte);
+
+    Serial.onReceive(onReceiveSerial);
+    CAN.onReceive(onReceiveCan);
+
+    xFlagsSystemeEvent = xEventGroupCreate();
+    xMutexSerialLink = xSemaphoreCreateMutex();
+    xMutexCanLink = xSemaphoreCreateMutex();
+    xBalTxCanMsg = xQueueCreate(10, sizeof(CANMessage));
+
+    xTaskCreate(TACHE_envoie_message_CAN,"TACHE_TX_CAN",128,(void *)num_carte,10,NULL);
+    xTaskCreate(TACHE_envoie_num_carte,"TACHE_NUM_CARTE",64,(void *)num_carte,5,NULL);
+    xTaskCreate(TACHE_mesure_point_VI,"TACHE_POINT_VI",128,(void*)num_carte,5,NULL);
 }
 
-void onReceive(int packetSize)
+void onReceiveCan(int packetSize)
 {
 
-    typedef struct CANMessage
-    {
-        unsigned int id = 0;
-        char len = 0;
-        unsigned char data[8] = {0};
-    } CANMessage;
-
     CANMessage rxMsg;
-
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     rxMsg.id = CAN.packetId();
     rxMsg.len = CAN.packetDlc();
     int i = 0;
@@ -68,21 +53,81 @@ void onReceive(int packetSize)
         i++;
     }
 
-    if ((rxMsg.id == (11)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
+    if ((rxMsg.id == (11)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 11, on lance la mesure VI
     {
-        mesure_VI_All();
+        xEventGroupSetBitsFromISR(xFlagsSystemeEvent, FLAG_CAN_VI_ALL, &xHigherPriorityTaskWoken);
     }
-    else if ((rxMsg.id == (12)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 1, on lance la mesure VI
+    else if ((rxMsg.id == (12)) && (rxMsg.data[0] == num_carte)) // Si l'ID du message CAN est 12, on lance la mesure de la temperature
     {
-        mesure_temperature();
-        Serial.println("reçu");
+        xEventGroupSetBitsFromISR(xFlagsSystemeEvent, FLAG_CAN_TEMPERATURE, &xHigherPriorityTaskWoken);
     }
     else if (rxMsg.id == (0))
     {
-        delay(num_carte * 10);
-        CAN.beginPacket(10);
-        CAN.write(num_carte);
-        CAN.endPacket();
+        xEventGroupSetBitsFromISR(xFlagsSystemeEvent, FLAG_CAN_NUM_CARTE, &xHigherPriorityTaskWoken);
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+void onReceiveSerial()
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    xEventGroupSetBitsFromISR(xFlagsMessageSerial, BIT_SERIAL_MSG, &xHigherPriorityTaskWoken);
+
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+void TACHE_Traitement_message_Serie(void *pvParameters)
+{
+    String chaine = "";
+    String commande;
+    String valeur;
+    while (1)
+    {
+        xEventGroupWaitBits(xFlagsMessageSerial, BIT_SERIAL_MSG, pdTRUE, pdTRUE, portMAX_DELAY); // Attente d'un message série
+        while (Serial.available() > 0)
+        {
+            char ch = Serial.read();
+
+            if (ch == '\r' || ch == '\n')
+            {
+                if (chaine.length() > 0)
+                {
+                    int index = chaine.indexOf(' ');
+
+                    if (index == -1)
+                    {
+                        commande = chaine;
+                        valeur = "";
+                    }
+                    else
+                    {
+                        commande = chaine.substring(0, index);
+                        valeur = chaine.substring(index + 1);
+                    }
+
+                    if (commande == "M")
+                    {
+                        point_de_mesure point;
+                        point.alpha = valeur.toFloat();
+                        mesureVI(&point);
+                        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
+                        Serial.printf("Mesure VI : Alpha = %2.2f, Tension = %2.2f V, Courant = %2.2f A\n", point.alpha, point.tension, point.courant);
+                        xSemaphoreGive(xMutexSerialLink);
+                    }
+                    else if (commande == "A")
+                        xEventGroupSetBits(xFlagsSystemeEvent, FLAG_SERIE_VI_ALL);
+                    else if (commande == "T")
+                        xEventGroupSetBits(xFlagsSystemeEvent, FLAG_SERIE_TEMPERATURE);
+
+                    chaine = "";
+                }
+            }
+            else
+            {
+                chaine += ch;
+            }
+        }
     }
 }
 
@@ -96,7 +141,7 @@ void mesureVI(point_de_mesure *point)
     ledcWrite(CANAL, (int)(point->alpha / 100.0 * 512));
 
     // 3. Attente de stabilisation
-    delay(100); // Pause de 0.1 seconde pour laisser le circuit se stabiliser
+    vTaskDelay(pdMS_TO_TICKS(100)); // Pause de 0.1 seconde pour laisser le circuit se stabiliser
 
     // 4. Mesurer I et U
     float voltage_Vcourant = 0; // Réinitialise les accumulateurs de mesure
@@ -118,13 +163,142 @@ void mesureVI(point_de_mesure *point)
     point->tension = voltage_Vpanneau;
 }
 
-void Tache_mesure_courbe_VI()
+void Tache_mesure_courbe_VI(void *pvParameters)
 {
     point_de_mesure couple_VI2[NB_POINT]; // tableau des points de mesures
 
+    point_de_mesure Icc, V0;
+    CANMessage RxMsg;
+    RxMsg.data[4] = ((unsigned char)pvParameters);
     while (1)
     {
-        xEventGroupWaitBits(xFlagsMessageCan,BIT0,pdTRUE,pdTRUE,portMAX_DELAY); // attente du message de la callback de reveiller la tache de mesure
-        
+        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_VI_ALL, pdTRUE, pdTRUE, portMAX_DELAY); // attente du message de la callback de reveiller la tache de mesure
+        Icc.alpha = 100;
+        mesureVI(&Icc); // mesure de Icc ET Vmin
+
+        V0.alpha = 0;
+        mesureVI(&V0); // mesure de V0 et Imin
+        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
+        Serial.printf("Icc = %2.2f, Imin = %2.2f , V0 = %2.2f ,Vmin = %2.2f\n", Icc.courant, V0.courant, V0.tension, Icc.tension);
+        xSemaphoreGive(xMutexSerialLink);
+        // calcule des point theorique a mesuré
+        for (int i = 0; i < NB_POINT; i++)
+        {
+            if (i < NB_POINT_V0_CONST)
+            {
+                couple_VI2[i].tension = V0.tension;
+                couple_VI2[i].courant = V0.courant + (Icc.courant - V0.courant) * log10(1 + ((i) * 9) / (float)(NB_POINT_V0_CONST - 1));
+            }
+            else
+            {
+                couple_VI2[i].tension = Icc.tension + (V0.tension - Icc.tension) * log10(1 + ((i - NB_POINT_V0_CONST) * 9) / (float)(NB_POINT_Icc_CONST - 1));
+                couple_VI2[i].courant = Icc.courant;
+            }
+            Serial.printf("point %d : I = %2.2f, V = %2.2f\n", i, couple_VI2[i].courant, couple_VI2[i].tension);
+        }
+        // calculs des rapports cyclique a appliquer pour la mesure du point theorique
+        for (int i = 0; i < NB_POINT; i++)
+        {
+            float R_eq = couple_VI2[i].tension / couple_VI2[i].courant;
+            couple_VI2[i].alpha = (1.0 - (R_eq / R_mesure)) * 100;
+        }
+
+        // mesures
+        for (int i = 0; i < NB_POINT; i++)
+        {
+            mesureVI(&couple_VI2[i]);
+        }
+
+        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
+        Serial.printf("tension,courant,alpha\n");
+        for (int i = 0; i < NB_POINT; i++)
+        {
+            Serial.printf("%.2f,%.2f,%2.2f\n", couple_VI2[i].tension, couple_VI2[i].courant, couple_VI2[i].alpha);
+        }
+        xSemaphoreGive(xMutexSerialLink);
+
+        xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
+        RxMsg.id = 7;
+        RxMsg.len = 0; // indicateur de debut de transmition des poitns
+        xQueueSend(xBalTxCanMsg, &RxMsg, portMAX_DELAY);
+        RxMsg.id = 19;
+        for (int i = 0; i < NB_POINT; i++)
+        {
+            RxMsg.len = 5;
+            RxMsg.data[0] = (unsigned char)(((couple_VI2[i].tension * 100.0) >> 8) % 256);
+            RxMsg.data[1] = (unsigned char)((couple_VI2[i].tension * 100.0) % 256);
+            RxMsg.data[2] = (unsigned char)(((couple_VI2[i].courant * 100.0) >> 8) % 256);
+            RxMsg.data[3] = (unsigned char)((couple_VI2[i].courant * 100.0) % 256);
+            xQueueSend(xBalTxCanMsg, &RxMsg, portMAX_DELAY);
+        }
+        RxMsg.id = 8;
+        RxMsg.len = 0; // indicateur de fin de transmition des points
+        xQueueSend(xBalTxCanMsg, &RxMsg, portMAX_DELAY);
+        xSemaphoreGive(xMutexCanLink);
+    }
+}
+
+void TACHE_envoie_message_CAN(void *pvParameters)
+{
+    CANMessage TxMsg;
+    while (1)
+    {
+        xQueueReceive(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
+        CAN.beginPacket(TxMsg.id);
+        CAN.write(TxMsg.data, TxMsg.len);
+        CAN.endPacket();
+    }
+}
+
+void TACHE_mesure_temperature_TC74(void *pvParameters)
+{
+    CANMessage TxMsg;
+    TxMsg.len = 3;
+    TxMsg.id = 18;
+    TxMsg.data[2] = (char)pvParameters;
+
+    TC74 Tc74(0x48);
+    Tc74.begin();
+
+    while (Tc74.isStandby())
+    { // wait until the sensor is ready
+        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
+        Serial.println("La loose");
+        xSemaphoreGive(xMutexSerialLink);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+    while (1)
+    {
+
+        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_TEMPERATURE, pdTRUE, pdTRUE, portMAX_DELAY);
+        float temperature = Tc74.readTemperature('C');
+        if (temperature > 0)
+        {
+            TxMsg.data[0] = 1;
+        }
+        else
+        {
+            TxMsg.data[0] = 0;
+        }
+        TxMsg.data[1] = (char)temperature;
+
+        xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
+        xQueueSend(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
+        xSemaphoreGive(xMutexCanLink);
+    }
+}
+
+void TACHE_envoie_num_carte(void *pvParameters)
+{
+    CANMessage TxMsg;
+    TxMsg.len = 1;
+    TxMsg.id = 10;
+    TxMsg.data[0] = (char)pvParameters;
+    while (1)
+    {
+        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_NUM_CARTE, pdTRUE, pdTRUE, portMAX_DELAY);
+        xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
+        xQueueSend(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
+        xSemaphoreGive(xMutexCanLink);
     }
 }
