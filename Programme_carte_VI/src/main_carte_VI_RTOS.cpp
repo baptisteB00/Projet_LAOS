@@ -5,6 +5,7 @@ EventGroupHandle_t xFlagsMessageSerial;
 SemaphoreHandle_t xMutexSerialLink;
 SemaphoreHandle_t xMutexCanLink;
 QueueHandle_t xBalTxCanMsg;
+QueueHandle_t xBalRapportCyclique;
 
 char num_carte = 0;
 
@@ -18,6 +19,10 @@ void setup()
             ;
     }
 
+    ledcSetup(CANAL, FREQUENCE, RESOlUTION); // Configure le canal 0 avec la fréquence et la résolution définies
+    ledcAttachPin(19, CANAL);                // Attache la broche 19 au canal PWM 0
+    ledcWrite(CANAL, 0);                     // Applique un rapport cyclique initial (255 sur 511, soit ~50%)
+
     pinMode(PIN_SWITCH_BP1, INPUT);
     pinMode(PIN_SWITCH_BP2, INPUT);
     pinMode(PIN_SWITCH_BP3, INPUT);
@@ -30,13 +35,23 @@ void setup()
     CAN.onReceive(onReceiveCan);
 
     xFlagsSystemeEvent = xEventGroupCreate();
+    xFlagsMessageSerial = xEventGroupCreate();
     xMutexSerialLink = xSemaphoreCreateMutex();
     xMutexCanLink = xSemaphoreCreateMutex();
-    xBalTxCanMsg = xQueueCreate(10, sizeof(CANMessage));
+    xBalTxCanMsg = xQueueCreate(20, sizeof(CANMessage));
+    xBalRapportCyclique = xQueueCreate(10, sizeof(point_de_mesure));
 
-    xTaskCreate(TACHE_envoie_message_CAN,"TACHE_TX_CAN",128,(void *)num_carte,10,NULL);
-    xTaskCreate(TACHE_envoie_num_carte,"TACHE_NUM_CARTE",64,(void *)num_carte,5,NULL);
-    xTaskCreate(TACHE_mesure_point_VI,"TACHE_POINT_VI",128,(void*)num_carte,5,NULL);
+    xTaskCreate(TACHE_envoie_message_CAN, "TACHE_TX_CAN", 2048, (void *)(intptr_t)num_carte, 10, NULL);
+    xTaskCreate(TACHE_envoie_num_carte, "TACHE_NUM_CARTE", 2048, (void *)(intptr_t)num_carte, 5, NULL);
+    xTaskCreate(TACHE_mesure_point_VI, "TACHE_POINT_VI", 3072, (void *)(intptr_t)num_carte, 5, NULL);
+    xTaskCreate(TACHE_mesure_temperature_TC74, "TACHE_TEMPERATURE", 3072, (void *)(intptr_t)num_carte, 5, NULL);
+    xTaskCreate(TACHE_Traitement_message_Serie, "TACHE_TRAITEMENT_SERIE", 3072, (void *)(intptr_t)num_carte, 9, NULL);
+    xTaskCreate(TACHE_mesure_courbe_VI, "TACHE_MESURE_COURBE_VI", 4096, (void *)(intptr_t)num_carte, 5, NULL);
+}
+
+void loop()
+{
+    vTaskDelay(portMAX_DELAY);
 }
 
 void onReceiveCan(int packetSize)
@@ -110,10 +125,7 @@ void TACHE_Traitement_message_Serie(void *pvParameters)
                     {
                         point_de_mesure point;
                         point.alpha = valeur.toFloat();
-                        mesureVI(&point);
-                        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
-                        Serial.printf("Mesure VI : Alpha = %2.2f, Tension = %2.2f V, Courant = %2.2f A\n", point.alpha, point.tension, point.courant);
-                        xSemaphoreGive(xMutexSerialLink);
+                        xQueueSend(xBalRapportCyclique, &point, portMAX_DELAY);
                     }
                     else if (commande == "A")
                         xEventGroupSetBits(xFlagsSystemeEvent, FLAG_SERIE_VI_ALL);
@@ -163,16 +175,16 @@ void mesureVI(point_de_mesure *point)
     point->tension = voltage_Vpanneau;
 }
 
-void Tache_mesure_courbe_VI(void *pvParameters)
+void TACHE_mesure_courbe_VI(void *pvParameters)
 {
     point_de_mesure couple_VI2[NB_POINT]; // tableau des points de mesures
 
     point_de_mesure Icc, V0;
     CANMessage RxMsg;
-    RxMsg.data[4] = ((unsigned char)pvParameters);
+    RxMsg.data[4] = ((unsigned char)(intptr_t)pvParameters); // stocke le numero de carte dans le message CAN pour l'envoyer ensuite
     while (1)
     {
-        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_VI_ALL, pdTRUE, pdTRUE, portMAX_DELAY); // attente du message de la callback de reveiller la tache de mesure
+        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_VI_ALL | FLAG_SERIE_VI_ALL, pdTRUE, pdFALSE, portMAX_DELAY); // attente du message de la callback de reveiller la tache de mesure
         Icc.alpha = 100;
         mesureVI(&Icc); // mesure de Icc ET Vmin
 
@@ -194,7 +206,9 @@ void Tache_mesure_courbe_VI(void *pvParameters)
                 couple_VI2[i].tension = Icc.tension + (V0.tension - Icc.tension) * log10(1 + ((i - NB_POINT_V0_CONST) * 9) / (float)(NB_POINT_Icc_CONST - 1));
                 couple_VI2[i].courant = Icc.courant;
             }
+            xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
             Serial.printf("point %d : I = %2.2f, V = %2.2f\n", i, couple_VI2[i].courant, couple_VI2[i].tension);
+            xSemaphoreGive(xMutexSerialLink);
         }
         // calculs des rapports cyclique a appliquer pour la mesure du point theorique
         for (int i = 0; i < NB_POINT; i++)
@@ -225,10 +239,10 @@ void Tache_mesure_courbe_VI(void *pvParameters)
         for (int i = 0; i < NB_POINT; i++)
         {
             RxMsg.len = 5;
-            RxMsg.data[0] = (unsigned char)(((couple_VI2[i].tension * 100.0) >> 8) % 256);
-            RxMsg.data[1] = (unsigned char)((couple_VI2[i].tension * 100.0) % 256);
-            RxMsg.data[2] = (unsigned char)(((couple_VI2[i].courant * 100.0) >> 8) % 256);
-            RxMsg.data[3] = (unsigned char)((couple_VI2[i].courant * 100.0) % 256);
+            RxMsg.data[0] = (unsigned char)(((int)(couple_VI2[i].tension * 100.0) >> 8) % 256);
+            RxMsg.data[1] = (unsigned char)((int)(couple_VI2[i].tension * 100.0) % 256);
+            RxMsg.data[2] = (unsigned char)(((int)(couple_VI2[i].courant * 100.0) >> 8) % 256);
+            RxMsg.data[3] = (unsigned char)((int)(couple_VI2[i].courant * 100.0) % 256);
             xQueueSend(xBalTxCanMsg, &RxMsg, portMAX_DELAY);
         }
         RxMsg.id = 8;
@@ -255,7 +269,7 @@ void TACHE_mesure_temperature_TC74(void *pvParameters)
     CANMessage TxMsg;
     TxMsg.len = 3;
     TxMsg.id = 18;
-    TxMsg.data[2] = (char)pvParameters;
+    TxMsg.data[2] = (char)(intptr_t)pvParameters;
 
     TC74 Tc74(0x48);
     Tc74.begin();
@@ -270,7 +284,7 @@ void TACHE_mesure_temperature_TC74(void *pvParameters)
     while (1)
     {
 
-        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_TEMPERATURE, pdTRUE, pdTRUE, portMAX_DELAY);
+        xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_TEMPERATURE | FLAG_SERIE_TEMPERATURE, pdTRUE,pdFALSE, portMAX_DELAY);
         float temperature = Tc74.readTemperature('C');
         if (temperature > 0)
         {
@@ -285,6 +299,9 @@ void TACHE_mesure_temperature_TC74(void *pvParameters)
         xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
         xQueueSend(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
         xSemaphoreGive(xMutexCanLink);
+        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
+        Serial.printf("Temperature : %2.2f °C\n", temperature);
+        xSemaphoreGive(xMutexSerialLink);
     }
 }
 
@@ -293,12 +310,25 @@ void TACHE_envoie_num_carte(void *pvParameters)
     CANMessage TxMsg;
     TxMsg.len = 1;
     TxMsg.id = 10;
-    TxMsg.data[0] = (char)pvParameters;
+    TxMsg.data[0] = (char)(intptr_t)pvParameters;
     while (1)
     {
         xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_NUM_CARTE, pdTRUE, pdTRUE, portMAX_DELAY);
         xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
         xQueueSend(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
         xSemaphoreGive(xMutexCanLink);
+    }
+}
+
+void TACHE_mesure_point_VI(void *pvParameters)
+{
+    point_de_mesure point;
+    while (1)
+    {
+        xQueueReceive(xBalRapportCyclique, &point, portMAX_DELAY);
+        mesureVI(&point);
+        xSemaphoreTake(xMutexSerialLink, portMAX_DELAY);
+        Serial.printf("Mesure VI : Alpha = %2.2f, Tension = %2.2f V, Courant = %2.2f A\n", point.alpha, point.tension, point.courant);
+        xSemaphoreGive(xMutexSerialLink);
     }
 }
