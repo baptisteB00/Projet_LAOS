@@ -267,8 +267,10 @@ void task_Measure_TEMP_HUM(void *pvParameters)
 
       do
       {
-        am2315.readTemperatureAndHumidity(&temperature, &humidity);
-      } while (isnan(temperature) || isnan(humidity));
+      am2315.readTemperatureAndHumidity(&temperature, &humidity);
+      } while (isnan(temperature)||isnan(humidity));
+
+      
       
       tempHumData.humidity = humidity;
       tempHumData.temperature = temperature;
@@ -345,7 +347,7 @@ void task_Grouping(void *pvParameters)
         txMsg.data[5] = 0;
       }
 
-      if (xQueueReceive(xTempHumQueue, &meteoData, pdMS_TO_TICKS(2000)) == pdPASS)
+      if (xQueueReceive(xTempHumQueue, &meteoData, pdMS_TO_TICKS(5000)) == pdPASS)
       {
         int humidityInt = meteoData.humidity * 100;
         txMsg.data[0] = humidityInt / 256;

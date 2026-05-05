@@ -52,6 +52,11 @@ struct point_de_mesure
   float alpha;
 };
 
+facteur_tension[5] ;
+constante_tension[5] ;
+facteur_courant[5] ;
+constante_courant[5] ;
+
 void onReceiveCan(int packetSize);
 void onReceiveSerial();
 void TACHE_Traitement_message_Serie(void *pvParameters);
