@@ -68,7 +68,7 @@ void setup()
   xTaskCreate(task_Measure_TEMP_HUM, "TASK_MEASURE_TEMP_HUM", 2048, NULL, 9, NULL);
   xTaskCreate(task_Grouping, "TASK_GROUPING", 2048, NULL, 9, NULL);
   xTaskCreate(task_Serial_RX, "TASK_SERIAL_RX", 2048, NULL, 10, NULL);
-  xTaskCreate(task_Send_Card_Num, "TASK_CARD_NUM", 2048, NULL, 5, NULL);
+  xTaskCreate(task_Send_Card_Num, "TASK_CARD_NUM", 2048, NULL, 9, NULL);
 }
 
 void loop()
