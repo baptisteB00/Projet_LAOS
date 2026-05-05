@@ -172,8 +172,8 @@ void mesureVI(point_de_mesure *point)
     // 5. Ouvrir les PIN_RELAIS
     digitalWrite(PIN_RELAIS, LOW); // Met le PIN_RELAIS à l'état BAS ("ouvert" / "off")
     
-    Vpanneau = Vpanneau * (Vpanneau*facteur_tension[num_carte] + constante_tension[num_carte]);
-    Vcourant = Vcourant * (Vcourant*facteur_courant[num_carte] + constante_courant[num_carte]);
+    Vpanneau = Vpanneau * (Vpanneau*facteur_tension[num_carte-1] + constante_tension[num_carte-1]);
+    Vcourant = Vcourant * (Vcourant*facteur_courant[num_carte-1] + constante_courant[num_carte-1]);
     
     point->courant = Vpanneau;
     point->tension = Vcourant;
