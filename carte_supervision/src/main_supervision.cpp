@@ -38,6 +38,7 @@ void setup()
 
 void loop()
 {
+  int All_num_cartes ;
   float tension = 0.0f;
   float courant = 0.0f;
   float humidite = 0.0f;
@@ -57,6 +58,11 @@ void loop()
     case 8:
       Serial.println("99");
       break;
+
+    case 10:
+    All_num_cartes = rxMsg.data[0];
+    Serial.printf("0;%d\n\r", All_num_cartes);
+    break;
 
     case 18:
       temperature_panneau = rxMsg.data[1];
@@ -100,12 +106,12 @@ void loop()
 
     case 45:
       humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
-      temperature_ext = (rxMsg.data[3] * 256 + rxMsg.data[4]) / 100.0f;
-      if (rxMsg.data[2] < 0)
+      temperature_ext = (rxMsg.data[2] * 256 + rxMsg.data[3]) / 100.0f;
+     /* if (rxMsg.data[2] < 0)
       {
         temperature_ext = -temperature_ext;
-      }
-      irradiance = (rxMsg.data[5] * 256 + rxMsg.data[6]) / 100.0f;
+      }*/
+      irradiance = (rxMsg.data[4] * 256 + rxMsg.data[5]) / 100.0f;
 
       Serial.printf("10;%.2f;%.2f;%.2f", humidite, temperature_ext, irradiance);
       Serial.println();
@@ -194,6 +200,12 @@ void reception(char ch)
     else if (commande == "T")
     {
       CAN.beginPacket(12);
+      CAN.write(valeur.toInt());
+      CAN.endPacket();
+    }
+    else if (commande == "N")
+    {
+      CAN.beginPacket(0);
       CAN.write(valeur.toInt());
       CAN.endPacket();
     }
