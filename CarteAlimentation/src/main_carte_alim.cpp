@@ -56,7 +56,7 @@ void loop()
 
     if (rxMsg.id == 0)
     {
-      CAN.beginPacket(0x10);
+      CAN.beginPacket(10);
       CAN.write(NumCarte);
       delay(10 * NumCarte);
       CAN.endPacket();
