@@ -61,14 +61,14 @@ void loop()
     case 18:
       temperature_panneau = rxMsg.data[1];
       numero_carte = rxMsg.data[2];
-      Serial.printf("%2d;%d", numero_carte, temperature_panneau);
+      Serial.printf("2;%2d;%d", numero_carte, temperature_panneau);
       break;
 
     case 19:
       tension = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       courant = (rxMsg.data[2] * 256 + rxMsg.data[3]) / 100.0f;
       numero_carte = rxMsg.data[4];
-      Serial.printf("%d;%.2f;%.2f\n\r", numero_carte, tension, courant);
+      Serial.printf("1;%d;%.2f;%.2f\n\r", numero_carte, tension, courant);
       Serial.println();
 
       break;
