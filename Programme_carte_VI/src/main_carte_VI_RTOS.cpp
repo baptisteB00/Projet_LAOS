@@ -173,13 +173,14 @@ void mesureVI(point_de_mesure *point)
     
     Vpanneau = Vpanneau * (Vpanneau*facteur_tension[num_carte-1] + constante_tension[num_carte-1]);
     Vcourant = Vcourant * (Vcourant*facteur_courant[num_carte-1] + constante_courant[num_carte-1]);
-    
+    xSemaphoreTake(xMutexSerialLink,portMAX_DELAY);
     Serial.printf("avant correction courant : %.2f , tension : %.2f",Vcourant,Vpanneau);    
    
     point->courant = Vpanneau;
     point->tension = Vcourant;
     
     Serial.printf("apres correction courant : %.2f , tension : %.2f",Vcourant,Vpanneau);    
+    xSemaphoreGive(xMutexSerialLink);
 }
 
 void TACHE_mesure_courbe_VI(void *pvParameters)
