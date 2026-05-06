@@ -27,7 +27,6 @@ void setup()
     pinMode(PIN_SWITCH_BP2, INPUT);
     pinMode(PIN_SWITCH_BP3, INPUT);
     pinMode(PIN_SWITCH_BP4, INPUT);
-
     num_carte = digitalRead(PIN_SWITCH_BP1) | (digitalRead(PIN_SWITCH_BP2) << 1) | (digitalRead(PIN_SWITCH_BP3) << 2) | (digitalRead(PIN_SWITCH_BP4) << 3);
     Serial.printf("Numero de carte : %d\n", num_carte);
 
@@ -175,8 +174,12 @@ void mesureVI(point_de_mesure *point)
     Vpanneau = Vpanneau * (Vpanneau*facteur_tension[num_carte-1] + constante_tension[num_carte-1]);
     Vcourant = Vcourant * (Vcourant*facteur_courant[num_carte-1] + constante_courant[num_carte-1]);
     
+    Serial.printf("avant correction courant : %.2f , tension : %.2f",Vcourant,Vpanneau);    
+   
     point->courant = Vpanneau;
     point->tension = Vcourant;
+    
+    Serial.printf("apres correction courant : %.2f , tension : %.2f",Vcourant,Vpanneau);    
 }
 
 void TACHE_mesure_courbe_VI(void *pvParameters)
@@ -320,10 +323,8 @@ void TACHE_envoie_num_carte(void *pvParameters)
         xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_NUM_CARTE, pdTRUE, pdTRUE, portMAX_DELAY);
         xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
         xQueueSend(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
-        xSemaphoreGive(xMutexCanLink);
-    }
+        xSemaphoreGive(xMutexCanLink);    }
 }
-
 void TACHE_mesure_point_VI(void *pvParameters)
 {
     point_de_mesure point;
