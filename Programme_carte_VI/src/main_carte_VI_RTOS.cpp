@@ -18,6 +18,8 @@ void setup()
         while (1)
             ;
     }
+    pinMode(PIN_RELAIS,OUTPUT);
+    digitalWrite(PIN_RELAIS,LOW);
 
     ledcSetup(CANAL, FREQUENCE, RESOlUTION); // Configure le canal 0 avec la fréquence et la résolution définies
     ledcAttachPin(19, CANAL);                // Attache la broche 19 au canal PWM 0
@@ -171,16 +173,17 @@ void mesureVI(point_de_mesure *point)
     // 5. Ouvrir les PIN_RELAIS
     digitalWrite(PIN_RELAIS, LOW); // Met le PIN_RELAIS à l'état BAS ("ouvert" / "off")
     
+    //xSemaphoreTake(xMutexSerialLink,portMAX_DELAY);
+    //Serial.printf("avant correction courant : %.2f , tension : %.2f\n\r",Vcourant,Vpanneau);    
+
     Vpanneau = Vpanneau * (Vpanneau*facteur_tension[num_carte-1] + constante_tension[num_carte-1]);
     Vcourant = Vcourant * (Vcourant*facteur_courant[num_carte-1] + constante_courant[num_carte-1]);
-    xSemaphoreTake(xMutexSerialLink,portMAX_DELAY);
-    Serial.printf("avant correction courant : %.2f , tension : %.2f",Vcourant,Vpanneau);    
    
-    point->courant = Vpanneau;
-    point->tension = Vcourant;
+    point->courant = Vcourant;
+    point->tension = Vpanneau;
     
-    Serial.printf("apres correction courant : %.2f , tension : %.2f",Vcourant,Vpanneau);    
-    xSemaphoreGive(xMutexSerialLink);
+    //Serial.printf("apres correction courant : %.2f , tension : %.2f\n\r",Vcourant,Vpanneau);    
+    //xSemaphoreGive(xMutexSerialLink);
 }
 
 void TACHE_mesure_courbe_VI(void *pvParameters)
