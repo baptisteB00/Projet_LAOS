@@ -52,10 +52,10 @@ struct point_de_mesure
   float alpha;
 };
 
-float facteur_tension[5] ={-0.00806,-0.00126,-0.00847,-0.01900,-0.00955,};
-float constante_tension[5] ={1.13,1.210,1.14,1.31,1.6,};
-float facteur_courant[5] ={0.00188,-0.0154,-0.0066,-0.00653,-0.0138,};
-float constante_courant[5] ={1.01,1.11,1.04,1.05,1.07,};
+float facteur_tension[5] ={-0.00806,-0.00126,-0.00847,-0.00955,-0.01900};
+float constante_tension[5] ={1.13,1.210,1.14,1.6,1.31};
+float facteur_courant[5] ={0.00188,-0.0154,-0.0066,-0.0138,-0.00653};
+float constante_courant[5] ={1.01,1.11,1.04,1.07,1.05};
 
 void onReceiveCan(int packetSize);
 void onReceiveSerial();
