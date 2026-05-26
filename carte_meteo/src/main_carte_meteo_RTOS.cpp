@@ -73,7 +73,6 @@ void setup()
 
 void loop()
 {
-  vTaskDelay(portMAX_DELAY);
 }
 
 void task_CAN_TX(void *pvParameters)
@@ -100,7 +99,8 @@ void task_CAN_TX(void *pvParameters)
       float hum = ((txMsg.data[0] << 8) | txMsg.data[1]) / 100.0;
       float temp = ((txMsg.data[2] << 8) | txMsg.data[3]) / 100.0;
       int irr = (txMsg.data[4] << 8) | txMsg.data[5];
-      Serial.printf("[CAN TX] Groupement envoye -> Temp: %.2f C | Hum: %.2f %% | Irr: %d\n", temp, hum, irr / 100);
+      //Serial.printf("[CAN TX] Groupement envoye -> Temp: %.2f C | Hum: %.2f %% | Irr: %d\n", temp, hum, irr / 100);
+      Serial.printf("%.2f;%.2f;%.2d\n\r",temp,hum,irr/100);
     }
     xSemaphoreGive(xSerialMutex);
   }
@@ -119,11 +119,11 @@ void onReceiveCan(int packetSize)
     i++;
   }
 
-  if ((rxMsg.id == (2)))
+  if (rxMsg.id == 2)
   {
     xEventGroupSetBitsFromISR(xSystemEventGroup, EVENT_HUM, &xHigherPriorityTaskWoken);
   }
-  else if ((rxMsg.id == (3)))
+  else if (rxMsg.id == 3)
   {
     xEventGroupSetBitsFromISR(xSystemEventGroup, EVENT_TEMP, &xHigherPriorityTaskWoken);
   }
@@ -206,8 +206,7 @@ void task_Measure_TEMP_HUM(void *pvParameters)
     xSemaphoreTake(xSerialMutex, portMAX_DELAY);
     Serial.println("Starting am2315 failed!");
     xSemaphoreGive(xSerialMutex);
-    while (1)
-      ;
+    vTaskDelay(portMAX_DELAY);
   }
 
   xSemaphoreTake(xSerialMutex, portMAX_DELAY);
@@ -370,9 +369,9 @@ void task_Grouping(void *pvParameters)
 
       xQueueSend(xCanTxQueue, &txMsg, portMAX_DELAY);
       
-      xSemaphoreTake(xSerialMutex, portMAX_DELAY);
-      Serial.println("Message de regroupement complet envoye");
-      xSemaphoreGive(xSerialMutex);
+      //xSemaphoreTake(xSerialMutex, portMAX_DELAY);
+      //Serial.println("Message de regroupement complet envoye");
+      //xSemaphoreGive(xSerialMutex);
     }
   }
 }
