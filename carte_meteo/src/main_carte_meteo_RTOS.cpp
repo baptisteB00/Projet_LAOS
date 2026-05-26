@@ -201,6 +201,7 @@ void task_Measure_TEMP_HUM(void *pvParameters)
   Adafruit_AM2315 am2315;
   CANMessage txMsg;
   TempHumData tempHumData;
+  vTaskDelay(pdTICKS_TO_MS(1000)); //petite attente pour que le capteur ai le temps de se lancer
   if (!am2315.begin())
   {
     xSemaphoreTake(xSerialMutex, portMAX_DELAY);

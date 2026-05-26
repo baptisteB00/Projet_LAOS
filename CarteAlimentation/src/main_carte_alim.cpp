@@ -50,10 +50,6 @@ void loop()
 {
   if (canAvailable == true)
   {
-    
-
-
-
     if (rxMsg.id == 0)
     {
       CAN.beginPacket(10);

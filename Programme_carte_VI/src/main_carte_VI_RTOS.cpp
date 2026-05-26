@@ -325,6 +325,7 @@ void TACHE_envoie_num_carte(void *pvParameters)
     while (1)
     {
         xEventGroupWaitBits(xFlagsSystemeEvent, FLAG_CAN_NUM_CARTE, pdTRUE, pdTRUE, portMAX_DELAY);
+        vTaskDelay(pdTICKS_TO_MS(TxMsg.data[0])); //delay pour eviter les embouteillage d'envoi des messages 
         xSemaphoreTake(xMutexCanLink, portMAX_DELAY);
         xQueueSend(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
         xSemaphoreGive(xMutexCanLink);    }
