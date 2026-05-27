@@ -1,30 +1,20 @@
-/*
- * ============================================================
- *  CARTE MESURE VI (Courant – Tension)
- * ============================================================
- *  Rôle : mesurer la caractéristique I-V d'un panneau solaire.
- *         Pour chaque point, on applique un rapport cyclique PWM
- *         sur une résistance de charge, puis on lit tension et courant.
+/**
+ * @file main_carte_VI_RTOS.cpp
+ * @brief Carte Mesure I-V – caractérisation courant-tension d'un panneau solaire.
  *
- *  Architecture FreeRTOS – 6 tâches qui s'exécutent en parallèle :
+ * Mesure la courbe I-V en faisant varier le rapport cyclique PWM (0–100 %)
+ * sur une résistance de charge, puis en lisant tension et courant via ADC.
+ * Le numéro de carte (1 à 5) est lu au démarrage sur un DIP switch 4 bits.
  *
- *    TaskEnvoiMessageCan        (priorité 10) – envoie les trames CAN en attente
- *    TaskTraitementMessageSerie (priorité  9) – interprète les commandes série
- *    TaskMesureTemperatureTc74  (priorité  5) – lit le capteur de température TC74
- *    TaskMesurePointVI          (priorité  5) – mesure un point VI à alpha fixé
- *    TaskEnvoiNumCarte          (priorité  5) – répond aux demandes d'identification
- *    TaskMesureCourbeVI         (priorité  5) – trace la courbe VI complète
- *
- *  Outils FreeRTOS utilisés :
- *    - Groupe d'événements (flagsSystemeEvent, flagsMessageSerial) :
- *        un registre de bits ; une tâche se met en sommeil en attendant
- *        qu'un bit précis soit levé, sans consommer de CPU.
- *    - File d'attente (balTxCanMsg, balRapportCyclique) :
- *        une FIFO pour transmettre des données entre tâches/ISR.
- *    - Mutex (mutexSerialLink, mutexCanLink) :
- *        un verrou qui garantit qu'une seule tâche à la fois utilise
- *        la liaison série ou le bus CAN.
- * ============================================================
+ * **Architecture FreeRTOS – 6 tâches :**
+ * | Tâche | Prio | Pile | Rôle |
+ * |-------|------|------|------|
+ * | TaskEnvoiMessageCan | 10 | 2048 | Envoie les trames CAN de `balTxCanMsg` |
+ * | TaskTraitementMessageSerie | 9 | 3072 | Interprète les commandes série |
+ * | TaskMesureCourbeVI | 5 | 4096 | Trace la courbe complète (23 points) |
+ * | TaskMesurePointVI | 5 | 3072 | Mesure un point à alpha fixé |
+ * | TaskMesureTemperatureTc74 | 5 | 3072 | Lecture TC74 via I2C |
+ * | TaskEnvoiNumCarte | 5 | 2048 | Répond aux demandes d'identification |
  */
 
 #include "main_carte_VI_RTOS.h"
@@ -118,15 +108,14 @@ void loop()
     vTaskDelay(portMAX_DELAY);
 }
 
-/* ==================================================================== */
-/*  CALLBACKS D'INTERRUPTION
- *  Ces fonctions sont appelées automatiquement lors d'une réception.
- *  Règle importante : dans une interruption, on ne fait QUE lever
- *  un drapeau (via les fonctions "...FromISR") pour réveiller une tâche.
- *  Tout traitement lourd se fait dans la tâche correspondante.
- * ==================================================================== */
-
-/* Callback appelée à chaque trame CAN reçue */
+/**
+ * @brief Callback CAN – appelée en ISR à chaque trame reçue.
+ *
+ * Lit l'ID et les données, puis lève le bit d'événement correspondant
+ * dans `flagsSystemeEvent` **uniquement si le message est destiné à cette carte**
+ * (vérification `data[0] == numCarte` pour ID=11 et ID=12).
+ * @param packetSize Taille de la trame (fournie par la bibliothèque CAN).
+ */
 void OnReceiveCan(int packetSize)
 {
     CanMessage_t localRxMsg;
@@ -161,7 +150,12 @@ void OnReceiveCan(int packetSize)
     portYIELD_FROM_ISR(higherPriorityTaskWoken);
 }
 
-/* Callback appelée à chaque caractère reçu sur la liaison série */
+/**
+ * @brief Callback UART – appelée en ISR à chaque réception série.
+ *
+ * Lève `BIT_SERIAL_MSG` dans `flagsMessageSerial` pour réveiller
+ * `TaskTraitementMessageSerie`.
+ */
 void OnReceiveSerial()
 {
     BaseType_t higherPriorityTaskWoken = pdFALSE;
@@ -169,15 +163,15 @@ void OnReceiveSerial()
     portYIELD_FROM_ISR(higherPriorityTaskWoken);
 }
 
-/* ==================================================================== */
-/*  TÂCHE : traitement des commandes reçues sur la liaison série
+/**
+ * @brief Tâche FreeRTOS – traitement des commandes série (priorité 9).
  *
- *  Attend le bit BIT_SERIAL_MSG levé par OnReceiveSerial().
- *  Commandes reconnues :
- *    "M <alpha>"  → mesure un point VI au rapport cyclique alpha (0-100 %)
- *    "A"          → déclenche la mesure de la courbe VI complète
- *    "T"          → déclenche la mesure de température
- * ==================================================================== */
+ * Attend `BIT_SERIAL_MSG`, lit les caractères et exécute :
+ * - `"M <alpha>"` → envoie un point dans `balRapportCyclique`
+ * - `"A"` → lève `FLAG_SERIE_VI_ALL`
+ * - `"T"` → lève `FLAG_SERIE_TEMPERATURE`
+ * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
+ */
 void TaskTraitementMessageSerie(void *pvParameters)
 {
     String chaine   = "";  // accumule les caractères jusqu'au retour chariot
@@ -235,19 +229,16 @@ void TaskTraitementMessageSerie(void *pvParameters)
     }
 }
 
-/* ==================================================================== */
-/*  FONCTION : mesure d'un point VI
+/**
+ * @brief Mesure un point de la courbe I-V.
  *
- *  Principe :
- *    1. Fermer le relais  → connecte le panneau à la charge
- *    2. Fixer le PWM      → impose un rapport cyclique (= résistance équivalente)
- *    3. Attendre 100 ms   → laisser le circuit se stabiliser
- *    4. Mesurer           → faire la moyenne de MOYENNE lectures ADC
- *    5. Ouvrir le relais  → déconnecte le panneau
- *    6. Corriger          → compense la non-linéarité des capteurs
+ * Séquence : ferme le relais → applique le PWM → attend 100 ms →
+ * moyenne `MOYENNE` (100) lectures ADC → ouvre le relais → corrige
+ * la non-linéarité avec les coefficients propres à `numCarte`.
  *
- *  Le résultat (tension et courant) est écrit directement dans *point.
- * ==================================================================== */
+ * @param point En entrée : `alpha` (rapport cyclique 0–100 %).
+ *              En sortie : `tension` (V) et `courant` (A) mesurés.
+ */
 void MesureVI(PointDeMesure_t *point)
 {
     /* Étape 1 : fermeture du relais */
@@ -289,18 +280,17 @@ void MesureVI(PointDeMesure_t *point)
     point->tension = tensionBrute;
 }
 
-/* ==================================================================== */
-/*  TÂCHE : mesure de la courbe VI complète
+/**
+ * @brief Tâche FreeRTOS – mesure de la courbe I-V complète (priorité 5).
  *
- *  Attend FLAG_CAN_VI_ALL ou FLAG_SERIE_VI_ALL.
- *  Algorithme :
- *    1. Mesure Icc (alpha=100 %) et V0 (alpha=0 %)
- *    2. Calcule NB_POINT points répartis en log sur la courbe théorique
- *       (distribution logarithmique = plus de points aux extrémités)
- *    3. Pour chaque point, calcule l'alpha nécessaire via R_eq = V/I
- *    4. Mesure chaque point réel
- *    5. Envoie tous les points sur le bus CAN
- * ==================================================================== */
+ * Attend `FLAG_CAN_VI_ALL` ou `FLAG_SERIE_VI_ALL`, puis :
+ * 1. Mesure Icc (alpha=100 %) et V0 (alpha=0 %)
+ * 2. Répartit `NB_POINT` (23) points en échelle logarithmique
+ * 3. Calcule le alpha nécessaire pour chaque point : `R_eq = V/I → alpha`
+ * 4. Mesure chaque point réel via `MesureVI()`
+ * 5. Envoie la séquence CAN : DEBUT + 23×`CAN_ID_RENVOI_MESURE_VI` + FIN
+ * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
+ */
 void TaskMesureCourbeVI(void *pvParameters)
 {
     PointDeMesure_t courbeVI[NB_POINT]; // tableau de tous les points de la courbe
@@ -412,13 +402,14 @@ void TaskMesureCourbeVI(void *pvParameters)
     }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : envoi des messages CAN en attente dans la file
+/**
+ * @brief Tâche FreeRTOS – envoi des messages CAN (priorité 10).
  *
- *  Cette tâche est la seule à écrire sur le bus CAN.
- *  Toutes les autres tâches déposent leurs messages dans balTxCanMsg ;
- *  c'est ici qu'ils sont réellement envoyés, un par un.
- * ==================================================================== */
+ * Seul point d'écriture sur le bus CAN. Toutes les autres tâches déposent
+ * leurs messages dans `balTxCanMsg` ; cette tâche les envoie un par un de
+ * manière bloquante (`portMAX_DELAY`).
+ * @param pvParameters Non utilisé.
+ */
 void TaskEnvoiMessageCan(void *pvParameters)
 {
     CanMessage_t txMsg;
@@ -432,15 +423,16 @@ void TaskEnvoiMessageCan(void *pvParameters)
     }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : mesure de la température du panneau (capteur TC74 via I2C)
+/**
+ * @brief Tâche FreeRTOS – mesure de la température panneau via TC74 (priorité 5).
  *
- *  Attend FLAG_CAN_TEMPERATURE ou FLAG_SERIE_TEMPERATURE.
- *  Format du message CAN envoyé (3 octets) :
- *    data[0] = signe (1 si T > 0, 0 sinon)
- *    data[1] = valeur absolue de la température (entier)
- *    data[2] = numéro de carte
- * ==================================================================== */
+ * Attend `FLAG_CAN_TEMPERATURE` ou `FLAG_SERIE_TEMPERATURE`, lit le TC74 (I2C, 0x48)
+ * et envoie `CAN_ID_RENVOI_TEMP_PANNEAU` (ID=18) :
+ * - `data[0]` = signe (1 si T > 0, 0 sinon)
+ * - `data[1]` = valeur absolue en °C (entier)
+ * - `data[2]` = numéro de carte
+ * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
+ */
 void TaskMesureTemperatureTc74(void *pvParameters)
 {
     CanMessage_t txMsg;
@@ -482,11 +474,13 @@ void TaskMesureTemperatureTc74(void *pvParameters)
     }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : réponse aux demandes d'identification
+/**
+ * @brief Tâche FreeRTOS – réponse aux demandes d'identification (priorité 5).
  *
- *  Attend FLAG_CAN_NUM_CARTE puis envoie le numéro de cette carte.
- * ==================================================================== */
+ * Attend `FLAG_CAN_NUM_CARTE` puis envoie `CAN_ID_RENVOI_NUM_CARTE` (ID=10)
+ * avec `data[0]` = numéro de cette carte.
+ * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
+ */
 void TaskEnvoiNumCarte(void *pvParameters)
 {
     CanMessage_t txMsg;
@@ -503,13 +497,13 @@ void TaskEnvoiNumCarte(void *pvParameters)
     }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : mesure d'un seul point VI à rapport cyclique fixé
+/**
+ * @brief Tâche FreeRTOS – mesure d'un point I-V à alpha fixé (priorité 5).
  *
- *  Attend qu'un point soit déposé dans balRapportCyclique (par la
- *  tâche série avec la commande "M <alpha>"), puis appelle MesureVI()
- *  et affiche le résultat.
- * ==================================================================== */
+ * Attend un `PointDeMesure_t` dans `balRapportCyclique` (déposé par la
+ * commande série `"M <alpha>"`), appelle `MesureVI()` et affiche le résultat.
+ * @param pvParameters Non utilisé.
+ */
 void TaskMesurePointVI(void *pvParameters)
 {
     PointDeMesure_t point;

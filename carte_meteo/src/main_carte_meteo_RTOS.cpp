@@ -1,28 +1,20 @@
-/*
- * ============================================================
- *  CARTE MÉTÉO
- * ============================================================
- *  Rôle : mesurer les conditions météorologiques autour du
- *         panneau solaire et les envoyer sur le bus CAN.
+/**
+ * @file main_carte_meteo_RTOS.cpp
+ * @brief Carte Météo – mesure température, humidité et irradiance solaire.
  *
- *  Capteurs :
- *    - AM2315 (I2C) : température extérieure + humidité
- *    - Cellule photoélectrique sur PIN_CPT_IRR : irradiance solaire
+ * Mesure les conditions météorologiques autour du panneau solaire via :
+ * - Capteur AM2315 (I2C) : température extérieure + humidité
+ * - Cellule photoélectrique sur `PIN_CPT_IRR` (GPIO 34) : irradiance
  *
- *  Architecture FreeRTOS – 6 tâches :
- *
- *    TaskEnvoiMessageCan          (priorité 10) – envoie les trames CAN
- *    TaskTraitementMessagesSerie  (priorité 10) – commandes série
- *    TaskMesureHumiditeTemperature (priorité 9) – lit le AM2315
- *    TaskMesureIrradiance          (priorité 9) – lit la cellule
- *    TaskRegroupementDonnee        (priorité 9) – combine les mesures
- *    TaskEnvoiNumeroCarte          (priorité 9) – identification
- *
- *  Outils FreeRTOS utilisés :
- *    - Groupe d'événements (systemEventGroup, serialEventGroup)
- *    - Files d'attente (canTxQueue, tempHumQueue, irrQueue)
- *    - Mutex (serialMutex) : accès exclusif à Serial.printf()
- * ============================================================
+ * **Architecture FreeRTOS – 6 tâches :**
+ * | Tâche | Prio | Rôle |
+ * |-------|------|------|
+ * | TaskEnvoiMessageCan | 10 | Envoie les trames CAN depuis `canTxQueue` |
+ * | TaskTraitementMessagesSerie | 10 | Traite les commandes série |
+ * | TaskMesureHumiditeTemperature | 9 | Lit le AM2315 |
+ * | TaskMesureIrradiance | 9 | Lit la cellule photoélectrique |
+ * | TaskRegroupementDonnee | 9 | Assemble les 3 mesures en un message |
+ * | TaskEnvoiNumeroCarte | 9 | Répond aux demandes d'identification |
  */
 
 #include <Arduino.h>
@@ -118,12 +110,14 @@ void loop()
 {
 }
 
-/* ==================================================================== */
-/*  TÂCHE : envoi des messages CAN
+/**
+ * @brief Tâche FreeRTOS – envoi des messages CAN (priorité 10).
  *
- *  Toutes les autres tâches déposent leurs messages dans canTxQueue.
- *  Cette tâche les envoie sur le bus un par un, et affiche un log série.
- * ==================================================================== */
+ * Seul point d'écriture sur le bus CAN. Toutes les autres tâches déposent
+ * leurs messages dans `canTxQueue` ; cette tâche les envoie un par un et
+ * affiche un log série via `serialMutex`.
+ * @param pvParameters Non utilisé.
+ */
 void TaskEnvoiMessageCan(void *pvParameters)
 {
   CanMessage_t txMsg;
@@ -170,7 +164,13 @@ void TaskEnvoiMessageCan(void *pvParameters)
 /*  CALLBACKS D'INTERRUPTION                                             */
 /* ==================================================================== */
 
-/* Appelée à chaque trame CAN reçue : lève le bit d'événement correspondant */
+/**
+ * @brief Callback CAN – appelée en ISR à chaque trame reçue.
+ *
+ * Lit l'identifiant de la trame et lève le bit d'événement correspondant
+ * dans `systemEventGroup` pour réveiller la tâche appropriée.
+ * @param packetSize Taille de la trame (fournie par la bibliothèque CAN).
+ */
 void OnReceiveCan(int packetSize)
 {
   CanMessage_t rxMsg;
@@ -204,7 +204,12 @@ void OnReceiveCan(int packetSize)
   portYIELD_FROM_ISR(higherPriorityTaskWoken);
 }
 
-/* Appelée à chaque caractère reçu sur la liaison série */
+/**
+ * @brief Callback UART – appelée en ISR à chaque réception série.
+ *
+ * Lève `EVENT_SERIAL_MSG_RX` dans `serialEventGroup` pour réveiller
+ * `TaskTraitementMessagesSerie`.
+ */
 void OnReceiveSerial()
 {
   BaseType_t higherPriorityTaskWoken = pdFALSE;
@@ -212,12 +217,13 @@ void OnReceiveSerial()
   portYIELD_FROM_ISR(higherPriorityTaskWoken);
 }
 
-/* ==================================================================== */
-/*  TÂCHE : traitement des commandes série
+/**
+ * @brief Tâche FreeRTOS – traitement des commandes série (priorité 10).
  *
- *  Commande reconnue :
- *    "M" → déclenche l'envoi groupé de toutes les mesures météo
- * ==================================================================== */
+ * Attend `EVENT_SERIAL_MSG_RX`, lit les caractères et exécute la commande.
+ * Commande reconnue : `"M"` → déclenche l'envoi groupé de toutes les mesures.
+ * @param pvParameters Non utilisé.
+ */
 void TaskTraitementMessagesSerie(void *pvParameters)
 {
   String serialBuffer  = ""; // accumule les caractères jusqu'au retour chariot
@@ -265,16 +271,17 @@ void TaskTraitementMessagesSerie(void *pvParameters)
   }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : mesure de la température et de l'humidité (capteur AM2315)
+/**
+ * @brief Tâche FreeRTOS – lecture du capteur AM2315 (priorité 9).
  *
- *  Attend EVENT_HUM, EVENT_TEMP, ou EVENT_ALL_TEMP_HUM.
+ * Attend `EVENT_HUM`, `EVENT_TEMP` ou `EVENT_ALL_TEMP_HUM`.
+ * Pour les demandes individuelles, envoie directement dans `canTxQueue`.
+ * Pour la demande groupée, dépose les données dans `tempHumQueue`.
  *
- *  Encodage CAN des flottants sur 2 octets :
- *    valeurEntiere = valeur * 100
- *    data[0] = octet fort  = valeurEntiere / 256
- *    data[1] = octet faible = valeurEntiere % 256
- * ==================================================================== */
+ * **Encodage CAN (float → 2 octets) :**
+ * `data[n] = (int)(val*100) / 256`, `data[n+1] = (int)(val*100) % 256`
+ * @param pvParameters Non utilisé.
+ */
 void TaskMesureHumiditeTemperature(void *pvParameters)
 {
   float temperature, humidity;
@@ -362,11 +369,14 @@ void TaskMesureHumiditeTemperature(void *pvParameters)
   }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : mesure de l'irradiance solaire (cellule photoélectrique)
+/**
+ * @brief Tâche FreeRTOS – lecture de l'irradiance solaire (priorité 9).
  *
- *  Attend EVENT_IRR (envoi individuel) ou EVENT_ALL_IRR (envoi groupé).
- * ==================================================================== */
+ * Lecture analogique sur `PIN_CPT_IRR` (GPIO 34).
+ * Attend `EVENT_IRR` (envoi individuel dans `canTxQueue`) ou
+ * `EVENT_ALL_IRR` (envoi dans `irrQueue` pour le regroupement).
+ * @param pvParameters Non utilisé.
+ */
 void TaskMesureIrradiance(void *pvParameters)
 {
   int irradiance, irradianceInt;
@@ -411,18 +421,16 @@ void TaskMesureIrradiance(void *pvParameters)
   }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : regroupement et envoi d'un seul message CAN complet
+/**
+ * @brief Tâche FreeRTOS – assemblage du message météo groupé (priorité 9).
  *
- *  Attend EVENT_ALL_REG, puis récupère les données déposées par
- *  TaskMesureIrradiance (irrQueue) et TaskMesureHumiditeTemperature
- *  (tempHumQueue) pour construire un unique message CAN groupé.
+ * Attend `EVENT_ALL_REG`, puis récupère l'irradiance (`irrQueue`, timeout 2 s)
+ * et la température+humidité (`tempHumQueue`, timeout 5 s) pour construire
+ * le message `CAN_ID_RENVOI_HUM_IRR_TEMP_EXT` (6 octets, ID=45).
  *
- *  Format du message CAN (6 octets) :
- *    data[0-1] : humidité encodée sur 2 octets
- *    data[2-3] : température encodée sur 2 octets
- *    data[4-5] : irradiance encodée sur 2 octets
- * ==================================================================== */
+ * En cas de timeout, les octets correspondants sont mis à `0xFF`.
+ * @param pvParameters Non utilisé.
+ */
 void TaskRegroupementDonnee(void *pvParameters)
 {
   CanMessage_t txMsg;
@@ -482,12 +490,13 @@ void TaskRegroupementDonnee(void *pvParameters)
   }
 }
 
-/* ==================================================================== */
-/*  TÂCHE : réponse aux demandes d'identification
+/**
+ * @brief Tâche FreeRTOS – réponse aux demandes d'identification (priorité 9).
  *
- *  Attend EVENT_CARD_NUM puis envoie le numéro de cette carte.
- *  Ce numéro est fixé à 10 (carte météo).
- * ==================================================================== */
+ * Attend `EVENT_CARD_NUM` puis envoie `CAN_ID_RENVOI_NUM_CARTE` (ID=10)
+ * avec `data[0]=10` (numéro fixe de la carte météo).
+ * @param pvParameters Non utilisé.
+ */
 void TaskEnvoiNumeroCarte(void *pvParameters)
 {
   CanMessage_t txMsg;

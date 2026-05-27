@@ -1,3 +1,12 @@
+/**
+ * @file main2.cpp
+ * @brief Carte Mesure Tension String – lecture des tensions/courant via multiplexeur.
+ *
+ * Mesure les tensions des 5 branches (strings) et le courant du champ solaire
+ * via un multiplexeur 8:1 connecté à 4 entrées ADC de l'ESP32.
+ * Numéro de carte : 13 (fixe dans le firmware).
+ */
+
 #include <Arduino.h>
 #include <CAN.h>
 
@@ -140,7 +149,14 @@ void reception(char ch)
   }
 }
 
-///@brief fonction pour mesurer l'entierete des tension / courant d'un string
+/**
+ * @brief Mesure les 5 tensions et le courant d'un string.
+ *
+ * Sélectionne chaque canal du multiplexeur (1 à 6), lit la tension via ADC
+ * (moyenne de `MOYENNAGE` lectures), applique le facteur d'échelle, puis
+ * envoie 6 trames CAN (ID=51) avec l'indice et la valeur encodée.
+ * @param num_string Numéro du string (1 à 4, correspond à la sortie multiplexeur).
+ */
 void mesure_string(char num_string){
 	CANMessage txMsg;
 	float mesure[6];
@@ -164,8 +180,10 @@ void mesure_string(char num_string){
 		xQueueSend(xBalTxCanMsg,&txMsg,portMAX_DELAY);
 	}
 }
-///@brief met la sortie du multiplexeur sur la broche specifier
-///@args chanel : numero de a broche (V1 => 1 et courant => 6)
+/**
+ * @brief Configure le multiplexeur pour sélectionner un canal.
+ * @param chanel Canal à sélectionner : 1=V1, 2=V2, 3=V3, 4=V4, 5=V5, 6=courant.
+ */
 void set_multiplexeur(int chanel){
 	bool inA,inB,inC; //variable pour stocker l'etat souhaiter des pin de configuration du multiplexeur
 
@@ -208,8 +226,11 @@ void set_multiplexeur(int chanel){
 	digitalWrite(PIN_SELECTION_MULTIPLEXEUR_C,inC);
 }
 
-///@brief fonction pour lire la tension a la sortie d'un multiplexeur
-///@args numero : numero du string pour la lecture de tension (string 1 => 1 ect ...)
+/**
+ * @brief Lit la valeur ADC à la sortie du multiplexeur (moyenne de `MOYENNAGE` lectures).
+ * @param numero Numéro du string (1 à 4) → sélectionne le pin ADC correspondant.
+ * @return Valeur ADC brute moyennée, ou -1.0f si le numéro est invalide.
+ */
 float lecture_tension_multiplexeur(char numero){
 	int lecture_tension = 0;
 	char pin;
@@ -240,6 +261,9 @@ float lecture_tension_multiplexeur(char numero){
 	return lecture_tension;
 }
 
+/**
+ * @brief Envoie le numéro de cette carte (13) sur le bus CAN (ID=10).
+ */
 void envoi_num_carte(){
 	CANMessage txMsg;
 	txMsg.id = 10;

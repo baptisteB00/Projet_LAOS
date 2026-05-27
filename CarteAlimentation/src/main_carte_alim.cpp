@@ -1,24 +1,17 @@
-/*
- * ============================================================
- *  CARTE ALIMENTATION
- * ============================================================
- *  Rôle : contrôle le relais principal qui alimente le panneau
- *         solaire, et signale son état via deux LEDs.
+/**
+ * @file main_carte_alim.cpp
+ * @brief Carte Alimentation – contrôle du relais et des LEDs d'état.
  *
- *  Matériel :
- *    - Relais         (broche PIN_RELAIS)   : coupe/rétablit l'alimentation
- *    - LED verte      (broche PIN_LED_VERTE): allumée = panneau alimenté
- *    - LED rouge      (broche PIN_LED_ROUGE): allumée = panneau coupé
- *    - Bus CAN 10 kbps
+ * Contrôle le relais principal qui alimente le panneau solaire et signale
+ * son état via deux LEDs (verte = alimenté, rouge = coupé).
  *
- *  Commandes CAN reçues :
- *    - CAN_ID_DEMANDE_NUM_CARTE   → renvoie le numéro de cette carte
- *    - CAN_ID_DEMANDE_ALIMENTATION → allume (data[0]=1) ou éteint (data[0]=0)
+ * **Messages CAN reçus :**
+ * - `CAN_ID_DEMANDE_NUM_CARTE`    → renvoie le numéro de cette carte (12)
+ * - `CAN_ID_DEMANDE_ALIMENTATION` → `data[0]=1` allume, `data[0]=0` éteint
  *
- *  Commande série (débogage) :
- *    - "R 1" → allume le relais
- *    - "R 0" → éteint le relais
- * ============================================================
+ * **Commandes série (débogage) :**
+ * - `"R 1"` → allume le relais
+ * - `"R 0"` → éteint le relais
  */
 
 #include <Arduino.h>
@@ -101,10 +94,9 @@ void loop()
   }
 }
 
-/* ==================================================================== */
-/*  Commande le relais et les LEDs d'état
- *    onOff = 0 → relais ouvert  (panneau coupé,  LED rouge)
- *    onOff = 1 → relais fermé   (panneau alimenté, LED verte)
+/**
+ * @brief Commande le relais et les LEDs d'état.
+ * @param onOff 0 = relais ouvert (LED rouge), 1 = relais fermé (LED verte).
  */
 void ControleRelais(int onOff)
 {
@@ -122,11 +114,12 @@ void ControleRelais(int onOff)
   }
 }
 
-/* ==================================================================== */
-/*  Callback CAN – appelée automatiquement à chaque message reçu.
- *  ATTENTION : cette fonction s'exécute en interruption.
- *  On se contente de copier le message dans rxMsg et de lever un drapeau ;
- *  le traitement réel est fait dans loop() pour rester hors interruption.
+/**
+ * @brief Callback CAN – appelée en interruption à chaque trame reçue.
+ *
+ * Copie la trame dans `rxMsg` et lève `canAvailable`. Le traitement
+ * réel se fait dans `loop()` hors interruption.
+ * @param packetSize Taille de la trame reçue (fournie par la bibliothèque CAN).
  */
 void OnReceiveCan(int packetSize)
 {
@@ -143,9 +136,10 @@ void OnReceiveCan(int packetSize)
   canAvailable = true; // signale à loop() qu'un message est prêt
 }
 
-/* ==================================================================== */
-/*  Appelée automatiquement par Arduino quand des caractères arrivent
- *  sur la liaison série.
+/**
+ * @brief Événement Arduino – appelé automatiquement à chaque réception UART.
+ *
+ * Lit tous les caractères disponibles et les transmet un par un à `Reception()`.
  */
 void serialEvent()
 {
@@ -155,12 +149,12 @@ void serialEvent()
   }
 }
 
-/* ==================================================================== */
-/*  Analyse les caractères reçus un par un sur la liaison série.
- *  On reconstruit la chaîne jusqu'au retour chariot (CR ou LF),
- *  puis on découpe "COMMANDE VALEUR" et on exécute la commande.
+/**
+ * @brief Analyse les caractères série un par un et exécute la commande.
  *
- *  Exemple : "R 1\r" → commande="R", valeur="1" → ControleRelais(1)
+ * Accumule les caractères jusqu'à CR/LF, puis découpe `"COMMANDE VALEUR"`.
+ * Commande reconnue : `"R <0|1>"` → `ControleRelais()`.
+ * @param ch Caractère reçu.
  */
 void Reception(char ch)
 {

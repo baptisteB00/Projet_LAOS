@@ -1,11 +1,7 @@
-/*
- * ============================================================
- *  CARTE MESURE VI – fichier d'en-tête
- * ============================================================
- *  Contient : includes, defines (broches, PWM, drapeaux FreeRTOS),
- *             structures de données, variables globales partagées
- *             entre les tâches, et déclarations des fonctions.
- * ============================================================
+/**
+ * @file main_carte_VI_RTOS.h
+ * @brief Carte Mesure I-V – définitions des broches, drapeaux FreeRTOS,
+ *        structures de données et déclarations des fonctions.
  */
 
 #include <Arduino.h>
@@ -14,14 +10,16 @@
 #include "math.h"
 #include <can_id.h>
 
-/* ---- Broches matérielles ------------------------------------------- */
-#define PIN_SWITCH_BP1     25   // bits du numéro de carte (DIP switch)
-#define PIN_SWITCH_BP2     26
-#define PIN_SWITCH_BP3     27
-#define PIN_SWITCH_BP4     14
-#define PIN_RELAIS         18   // relais de connexion du panneau
-#define PIN_LECTURE_TENSION 32  // entrée analogique : tension panneau
-#define PIN_LECTURE_COURANT 33  // entrée analogique : courant panneau
+/** @defgroup Broches Broches matérielles
+ * @{ */
+#define PIN_SWITCH_BP1     25   ///< DIP switch bit 0 (numéro de carte)
+#define PIN_SWITCH_BP2     26   ///< DIP switch bit 1
+#define PIN_SWITCH_BP3     27   ///< DIP switch bit 2
+#define PIN_SWITCH_BP4     14   ///< DIP switch bit 3
+#define PIN_RELAIS         18   ///< Relais de connexion du panneau
+#define PIN_LECTURE_TENSION 32  ///< Entrée ADC : tension panneau
+#define PIN_LECTURE_COURANT 33  ///< Entrée ADC : courant panneau
+/** @} */
 
 /* ---- Paramètres de mesure ------------------------------------------ */
 #define MOYENNE         100  // nombre de mesures pour faire une moyenne
@@ -53,20 +51,20 @@
 #define FLAG_SERIE_VI_ALL     BIT12  // commande "A" reçue en série
 #define FLAG_SERIE_NUM_CARTE  BIT13  // (réservé)
 
-/* ---- Structure d'un message CAN ------------------------------------ */
+/** @brief Message CAN générique. */
 typedef struct CanMessage_t
 {
-  unsigned int  id      = 0;      // identifiant CAN du message
-  char          len     = 0;      // nombre d'octets de données (0 à 8)
-  unsigned char data[8] = {0};    // données du message
+  unsigned int  id      = 0;      ///< Identifiant CAN (11 bits)
+  char          len     = 0;      ///< Nombre d'octets de données (0 à 8)
+  unsigned char data[8] = {0};    ///< Données du message
 } CanMessage_t;
 
-/* ---- Structure d'un point de mesure VI ----------------------------- */
+/** @brief Point de mesure sur la courbe I-V. */
 typedef struct PointDeMesure_t
 {
-  float tension; // tension mesurée au point (en Volts)
-  float courant; // courant mesuré au point (en Ampères)
-  float alpha;   // rapport cyclique PWM appliqué pour atteindre ce point (0 à 100 %)
+  float tension; ///< Tension mesurée (Volts)
+  float courant; ///< Courant mesuré (Ampères)
+  float alpha;   ///< Rapport cyclique PWM appliqué (0–100 %)
 } PointDeMesure_t;
 
 /* ---- Coefficients de correction matérielle -------------------------
