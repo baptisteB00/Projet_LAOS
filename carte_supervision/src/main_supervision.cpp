@@ -1,6 +1,6 @@
 #include <Arduino.h>
-
 #include <CAN.h>
+#include <can_id.h>
 
 typedef struct CANMessage
 {
@@ -38,7 +38,7 @@ void setup()
 
 void loop()
 {
-  int All_num_cartes ;
+  int numero_carte_recu ;
   float tension = 0.0f;
   float courant = 0.0f;
   float humidite = 0.0f;
@@ -51,26 +51,26 @@ void loop()
     switch (rxMsg.id)
     {
 
-    case 7:
+    case CAN_ID_DEBUT_TRANSMITION:
       Serial.println("0");
       break;
 
-    case 8:
+    case CAN_ID_FIN_TRANSMISSION:
       Serial.println("99");
       break;
 
-    case 10:
-    All_num_cartes = rxMsg.data[0];
-    Serial.printf("0;%d\n\r", All_num_cartes);
+    case CAN_ID_DEMANDE_NUM_CARTE:
+    numero_carte_recu = rxMsg.data[0];
+    Serial.printf("0;%d\n\r", numero_carte_recu);
     break;
 
-    case 18:
+    case CAN_ID_DEMANDE_TEMP_PANNEAU:
       temperature_panneau = rxMsg.data[1];
       numero_carte = rxMsg.data[2];
       Serial.printf("2;%2d;%d", numero_carte, temperature_panneau);
       break;
 
-    case 19:
+    case CAN_ID_RENVOI_MESURE_VI:
       tension = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       courant = (rxMsg.data[2] * 256 + rxMsg.data[3]) / 100.0f;
       numero_carte = rxMsg.data[4];
@@ -79,14 +79,14 @@ void loop()
 
       break;
 
-    case 42:
+    case CAN_ID_RENVOI_HUMIDITE:
       humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       Serial.printf("11;%.2f", humidite);
       Serial.println();
 
       break;
 
-    case 43:
+    case CAN_ID_RENVOI_TEMPERATURE:
       temperature_ext = (rxMsg.data[1] * 256 + rxMsg.data[2]) / 100.0f;
       if (rxMsg.data[0] == 0)
       {
@@ -97,20 +97,16 @@ void loop()
 
       break;
 
-    case 44:
+    case CAN_ID_RENVOI_IRRADIANCE:
       irradiance = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       Serial.printf("13;%.2f", irradiance);
       Serial.println();
 
       break;
 
-    case 45:
+    case CAN_ID_RENVOI_HUM_IRR_TEMP_EXT:
       humidite = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       temperature_ext = (rxMsg.data[2] * 256 + rxMsg.data[3]) / 100.0f;
-     /* if (rxMsg.data[2] < 0)
-      {
-        temperature_ext = -temperature_ext;
-      }*/
       irradiance = (rxMsg.data[4] * 256 + rxMsg.data[5]) / 100.0f;
 
       Serial.printf("10;%.2f;%.2f;%.2f", humidite, temperature_ext, irradiance);
@@ -182,38 +178,34 @@ void reception(char ch)
 
     if (commande == "R")
     {
-      CAN.beginPacket(1);
+      CAN.beginPacket(CAN_ID_DEMANDE_ALIMENTATION);
       CAN.write(valeur.toInt());
       CAN.endPacket();
     }
     else if (commande == "M")
     {
-      CAN.beginPacket(5);
+      CAN.beginPacket(CAN_ID_DEMANDE_HUM_IRR_TEMP_EXT);
       CAN.endPacket();
     }
     else if (commande == "VI")
     {
-      CAN.beginPacket(11);
+      CAN.beginPacket(CAN_ID_DEMANDE_MESURE_VI);
       CAN.write(valeur.toInt());
       CAN.endPacket();
     }
     else if (commande == "T")
     {
-      CAN.beginPacket(12);
+      CAN.beginPacket(CAN_ID_DEMANDE_TEMP_PANNEAU);
       CAN.write(valeur.toInt());
       CAN.endPacket();
     }
     else if (commande == "N")
     {
-      CAN.beginPacket(0);
+      CAN.beginPacket(CAN_ID_DEMANDE_NUM_CARTE);
       CAN.write(valeur.toInt());
       CAN.endPacket();
     }
 
-    {
-      CAN.beginPacket(6);
-      CAN.endPacket();
-    }
     chaine = "";
   }
   else
@@ -221,3 +213,4 @@ void reception(char ch)
     chaine += ch;
   }
 }
+

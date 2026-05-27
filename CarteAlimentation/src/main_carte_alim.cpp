@@ -1,143 +1,199 @@
+/*
+ * ============================================================
+ *  CARTE ALIMENTATION
+ * ============================================================
+ *  Rôle : contrôle le relais principal qui alimente le panneau
+ *         solaire, et signale son état via deux LEDs.
+ *
+ *  Matériel :
+ *    - Relais         (broche PIN_RELAIS)   : coupe/rétablit l'alimentation
+ *    - LED verte      (broche PIN_LED_VERTE): allumée = panneau alimenté
+ *    - LED rouge      (broche PIN_LED_ROUGE): allumée = panneau coupé
+ *    - Bus CAN 10 kbps
+ *
+ *  Commandes CAN reçues :
+ *    - CAN_ID_DEMANDE_NUM_CARTE   → renvoie le numéro de cette carte
+ *    - CAN_ID_DEMANDE_ALIMENTATION → allume (data[0]=1) ou éteint (data[0]=0)
+ *
+ *  Commande série (débogage) :
+ *    - "R 1" → allume le relais
+ *    - "R 0" → éteint le relais
+ * ============================================================
+ */
+
 #include <Arduino.h>
 #include <CAN.h>
+#include <can_id.h>
 
-typedef struct CANMessage
+/* ---- Structure d'un message CAN ------------------------------------ */
+typedef struct CanMessage_t
 {
-  bool extented = false;
-  bool RTR = false;
-  unsigned int id = 0;
-  char len = 0;
-  unsigned char data[8] = {0};
-} CANMessage;
+  bool         extended = false;    // trame étendue (29 bits) ou standard (11 bits)
+  bool         rtr      = false;    // trame de requête distante
+  unsigned int id       = 0;        // identifiant CAN
+  char         len      = 0;        // nombre d'octets de données (0 à 8)
+  unsigned char data[8] = {0};      // données du message
+} CanMessage_t;
 
-CANMessage rxMsg;
-bool canAvailable = false;
+/* ---- Broches matérielles ------------------------------------------- */
+#define PIN_RELAIS    25
+#define PIN_LED_VERTE 18
+#define PIN_LED_ROUGE 19
 
-/**************************************** define constante hard***********************************/
-#define PinRelais 25
-#define PinLedVerte 18
-#define PinLedRouge 19
-/*************************************** de claration variable globales  *************************/
-int NumCarte = 12;
+/* ---- Variables globales -------------------------------------------- */
+unsigned char numCarte   = 12;   // numéro identifiant cette carte sur le bus CAN
+CanMessage_t  rxMsg;             // dernier message CAN reçu (rempli par la callback)
+volatile bool canAvailable = false; // vrai quand un nouveau message est prêt à traiter
 
-void onReceive(int packetSize);
-void controleRelais(int OnOff);
-void reception(char ch);
+/* ---- Déclarations des fonctions ------------------------------------ */
+void OnReceiveCan(int packetSize);
+void ControleRelais(int onOff);
+void Reception(char ch);
 
+/* ==================================================================== */
 void setup()
 {
   Serial.begin(115200);
-while (!Serial);
-  
+  while (!Serial);
+
   Serial.println("Carte Alimentation");
 
-  // start the CAN bus at 1000 kbps
+  /* Démarrage du bus CAN à 10 kbps */
   if (!CAN.begin(10E3))
   {
-    Serial.println("Starting CAN failed!");
-    while (1)
-      ;
+    Serial.println("Erreur : demarrage CAN impossible !");
+    while (1);  // bloque ici si le CAN ne démarre pas
   }
-  // register the receive callback
-  CAN.onReceive(onReceive);
-  // pinMode
-  pinMode(PinRelais, OUTPUT);
-  pinMode(PinLedVerte, OUTPUT);
-  pinMode(PinLedRouge, OUTPUT);
+
+  /* On enregistre la fonction qui sera appelée à chaque réception CAN */
+  CAN.onReceive(OnReceiveCan);
+
+  /* Configuration des sorties */
+  pinMode(PIN_RELAIS,    OUTPUT);
+  pinMode(PIN_LED_VERTE, OUTPUT);
+  pinMode(PIN_LED_ROUGE, OUTPUT);
 }
 
+/* ==================================================================== */
 void loop()
 {
+  /* On vérifie si la callback CAN a reçu un nouveau message */
   if (canAvailable == true)
   {
-    if (rxMsg.id == 0)
+    canAvailable = false;
+    CanMessage_t msgLocal = rxMsg;
+
+    if (msgLocal.id == CAN_ID_DEMANDE_NUM_CARTE)
     {
-      CAN.beginPacket(10);
-      CAN.write(NumCarte);
-      delay(10 * NumCarte);
+      /* La supervision demande à toutes les cartes de se présenter.
+       * On attend numCarte * 10 ms avant de répondre pour éviter
+       * que toutes les cartes répondent en même temps sur le bus. */
+      delay(10 * numCarte);
+      CAN.beginPacket(CAN_ID_RENVOI_NUM_CARTE);
+      CAN.write(numCarte);
       CAN.endPacket();
     }
-    else if (rxMsg.id == 1)
+    else if (msgLocal.id == CAN_ID_DEMANDE_ALIMENTATION)
     {
-      controleRelais(rxMsg.data[0]);
+      /* data[0] = 1 → allumer, data[0] = 0 → éteindre */
+      ControleRelais(msgLocal.data[0]);
     }
-
-    canAvailable = false;
   }
 }
 
-void controleRelais(int OnOff)
+/* ==================================================================== */
+/*  Commande le relais et les LEDs d'état
+ *    onOff = 0 → relais ouvert  (panneau coupé,  LED rouge)
+ *    onOff = 1 → relais fermé   (panneau alimenté, LED verte)
+ */
+void ControleRelais(int onOff)
 {
-  if (OnOff == 0)
+  if (onOff == 0)
   {
-    digitalWrite(PinRelais, 0);
-    digitalWrite(PinLedVerte, 0);
-    digitalWrite(PinLedRouge, 1);
+    digitalWrite(PIN_RELAIS,    0);
+    digitalWrite(PIN_LED_VERTE, 0);
+    digitalWrite(PIN_LED_ROUGE, 1);
   }
   else
   {
-    digitalWrite(PinRelais, 1);
-    digitalWrite(PinLedVerte, 1);
-    digitalWrite(PinLedRouge, 0);
+    digitalWrite(PIN_RELAIS,    1);
+    digitalWrite(PIN_LED_VERTE, 1);
+    digitalWrite(PIN_LED_ROUGE, 0);
   }
 }
 
-/*****************************************************************************/
-/*    Fonction de callback appelée  lors de la reception d'un message can    */
-/*****************************************************************************/
-
-void onReceive(int packetSize)
+/* ==================================================================== */
+/*  Callback CAN – appelée automatiquement à chaque message reçu.
+ *  ATTENTION : cette fonction s'exécute en interruption.
+ *  On se contente de copier le message dans rxMsg et de lever un drapeau ;
+ *  le traitement réel est fait dans loop() pour rester hors interruption.
+ */
+void OnReceiveCan(int packetSize)
 {
-  rxMsg.id = CAN.packetId();
+  rxMsg.id  = CAN.packetId();
   rxMsg.len = CAN.packetDlc();
+
   int i = 0;
   while (CAN.available())
   {
     rxMsg.data[i] = CAN.read();
     i++;
   }
-  canAvailable = true;
+
+  canAvailable = true; // signale à loop() qu'un message est prêt
 }
 
+/* ==================================================================== */
+/*  Appelée automatiquement par Arduino quand des caractères arrivent
+ *  sur la liaison série.
+ */
 void serialEvent()
 {
-  while (Serial.available() > 0) // tant qu'il y a des caractères à lire
+  while (Serial.available() > 0)
   {
-    reception(Serial.read());
+    Reception(Serial.read());
   }
 }
-void reception(char ch)
+
+/* ==================================================================== */
+/*  Analyse les caractères reçus un par un sur la liaison série.
+ *  On reconstruit la chaîne jusqu'au retour chariot (CR ou LF),
+ *  puis on découpe "COMMANDE VALEUR" et on exécute la commande.
+ *
+ *  Exemple : "R 1\r" → commande="R", valeur="1" → ControleRelais(1)
+ */
+void Reception(char ch)
 {
-  static int i = 0;
-  static String chaine = "";
+  static String chaine = ""; // static = conservé entre deux appels
   String commande;
   String valeur;
   int index, length;
 
-  if ((ch == 13) or (ch == 10))
+  if ((ch == 13) or (ch == 10))  // retour chariot ou saut de ligne
   {
-    index = chaine.indexOf(' ');
+    index  = chaine.indexOf(' ');
     length = chaine.length();
 
     if (index == -1)
     {
-      commande = chaine;
-      valeur = "";
+      commande = chaine;  // pas d'espace : toute la chaîne est la commande
+      valeur   = "";
     }
     else
     {
-      commande = chaine.substring(0, index);
-      valeur = chaine.substring(index + 1, length);
+      commande = chaine.substring(0, index);        // mot avant l'espace
+      valeur   = chaine.substring(index + 1, length); // mot après l'espace
     }
 
     if (commande == "R")
     {
-      controleRelais(valeur.toInt());
+      ControleRelais(valeur.toInt());
     }
-    chaine = "";
+
+    chaine = ""; // on vide le buffer pour la prochaine commande
   }
   else
   {
-    chaine += ch;
+    chaine += ch; // on accumule les caractères
   }
 }

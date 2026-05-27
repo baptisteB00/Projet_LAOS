@@ -1,68 +1,93 @@
+/*
+ * ============================================================
+ *  CARTE MESURE VI – fichier d'en-tête
+ * ============================================================
+ *  Contient : includes, defines (broches, PWM, drapeaux FreeRTOS),
+ *             structures de données, variables globales partagées
+ *             entre les tâches, et déclarations des fonctions.
+ * ============================================================
+ */
+
 #include <Arduino.h>
 #include <CAN.h>
 #include "TC74.h"
 #include "math.h"
+#include <can_id.h>
 
+/* ---- Broches matérielles ------------------------------------------- */
+#define PIN_SWITCH_BP1     25   // bits du numéro de carte (DIP switch)
+#define PIN_SWITCH_BP2     26
+#define PIN_SWITCH_BP3     27
+#define PIN_SWITCH_BP4     14
+#define PIN_RELAIS         18   // relais de connexion du panneau
+#define PIN_LECTURE_TENSION 32  // entrée analogique : tension panneau
+#define PIN_LECTURE_COURANT 33  // entrée analogique : courant panneau
 
-#define PIN_SWITCH_BP1 25
-#define PIN_SWITCH_BP2 26
-#define PIN_SWITCH_BP3 27
-#define PIN_SWITCH_BP4 14
-#define PIN_RELAIS 18
-#define PIN_LECTURE_TENSION 32
-#define PIN_LECTURE_COURANT 33
+/* ---- Paramètres de mesure ------------------------------------------ */
+#define MOYENNE         100  // nombre de mesures pour faire une moyenne
+#define R_mesure         22  // résistance de mesure du courant (en ohms)
 
-#define MOYENNE 100 // Définit le nombre d'échantillons pour la moyenne des mesures
-#define R_mesure 22 // definit la valeur de la resistance de mesure
+/* ---- Nombre de points sur la courbe VI ----------------------------- */
+#define NB_POINT_Icc_CONST   8   // points à courant constant (près de Icc)
+#define NB_POINT_V0_CONST   15   // points à tension constante (près de V0)
+#define NB_POINT  (NB_POINT_Icc_CONST + NB_POINT_V0_CONST)  // total de points
 
-#define NB_POINT_Icc_CONST 8
-#define NB_POINT_V0_CONST 15
-#define NB_POINT NB_POINT_Icc_CONST + NB_POINT_V0_CONST // definit le nombre de point de mesure (ex: 3 => 3 point a Icc constant + 3point a V0 constant et 1 point a Icc et V0)
+/* ---- Configuration du PWM ------------------------------------------ */
+#define FREQUENCE   50000  // fréquence PWM : 50 kHz
+#define CANAL           0  // canal PWM de l'ESP32 (0 à 15)
+#define RESOlUTION      9  // résolution 9 bits → valeurs de 0 à 511
 
+/* ---- Drapeaux d'événements (bits dans le groupe d'événements) -------
+ *  Un groupe d'événements FreeRTOS est un registre de bits.
+ *  Chaque tâche attend un ou plusieurs bits précis avec xEventGroupWaitBits().
+ *  Quand l'événement arrive (réception CAN, commande série...),
+ *  on lève le bit correspondant avec xEventGroupSetBits() pour
+ *  réveiller la tâche concernée.
+ * --------------------------------------------------------------------- */
+#define FLAG_CAN_TEMPERATURE  BIT1   // demande de température reçue par CAN
+#define FLAG_CAN_VI_ALL       BIT2   // demande de courbe VI reçue par CAN
+#define FLAG_CAN_NUM_CARTE    BIT3   // demande d'identification reçue par CAN
 
-#define FLAG_CAN_TEMPERATURE BIT1
-#define FLAG_CAN_VI_ALL BIT2
-#define FLAG_CAN_NUM_CARTE BIT3
+#define BIT_SERIAL_MSG        BIT10  // message série reçu (levé dans la callback)
+#define FLAG_SERIE_TEMPERATURE BIT11 // commande "T" reçue en série
+#define FLAG_SERIE_VI_ALL     BIT12  // commande "A" reçue en série
+#define FLAG_SERIE_NUM_CARTE  BIT13  // (réservé)
 
-#define BIT_SERIAL_MSG BIT10
-#define FLAG_SERIE_TEMPERATURE BIT11
-#define FLAG_SERIE_VI_ALL BIT12
-#define FLAG_SERIE_NUM_CARTE BIT13
-
-
-// --- Configuration PWM ---
-#define FREQUENCE  50000 // Fréquence du signal PWM (50 kHz)
-#define CANAL  0         // Canal PWM (l'ESP32 en a 16)
-#define RESOlUTION 9    // Résolution PWM : 9 bits = 2^9 = 512 pas (0-511)
-
-typedef struct CANMessage
+/* ---- Structure d'un message CAN ------------------------------------ */
+typedef struct CanMessage_t
 {
-  unsigned int id = 0;
-  char len = 0;
-  unsigned char data[8] = {0};
-} CANMessage;
+  unsigned int  id      = 0;      // identifiant CAN du message
+  char          len     = 0;      // nombre d'octets de données (0 à 8)
+  unsigned char data[8] = {0};    // données du message
+} CanMessage_t;
 
-CANMessage rxMsg;
-bool canAvailable = false;
-
-struct point_de_mesure
+/* ---- Structure d'un point de mesure VI ----------------------------- */
+typedef struct PointDeMesure_t
 {
-  float tension;
-  float courant;
-  float alpha;
-};
+  float tension; // tension mesurée au point (en Volts)
+  float courant; // courant mesuré au point (en Ampères)
+  float alpha;   // rapport cyclique PWM appliqué pour atteindre ce point (0 à 100 %)
+} PointDeMesure_t;
 
-float facteur_tension[5] ={-0.00806,-0.00126,-0.00847,-0.00955,-0.01900};
-float constante_tension[5] ={1.13,1.210,1.14,1.6,1.31};
-float facteur_courant[5] ={0.00188,-0.0154,-0.0066,-0.0138,-0.00653};
-float constante_courant[5] ={1.01,1.11,1.04,1.07,1.05};
+/* ---- Coefficients de correction matérielle -------------------------
+ *  Les capteurs ne sont pas parfaitement linéaires. On corrige la mesure
+ *  brute avec une équation du second degré : mesure_corrigee = mesure * (mesure*facteur + constante)
+ *  Il y a un jeu de coefficients par numéro de carte (index = numCarte - 1).
+ * --------------------------------------------------------------------- */
+extern float facteurTension[5];
+extern float constanteTension[5];
+extern float facteurCourant[5];
+extern float constanteCourant[5];
 
-void onReceiveCan(int packetSize);
-void onReceiveSerial();
-void TACHE_Traitement_message_Serie(void *pvParameters);
-void TACHE_mesure_temperature_TC74(void *pvParameters);
-void TACHE_mesure_point_VI(void *pvParameters);
-void TACHE_envoie_message_CAN(void *pvParameters);
-void TACHE_envoie_num_carte(void *pvParameters);
-void TACHE_mesure_courbe_VI(void *pvParameters);
-void mesureVI(point_de_mesure *point);
+/* ---- Déclarations des fonctions ------------------------------------ */
+void OnReceiveCan(int packetSize);    // callback CAN (interruption)
+void OnReceiveSerial();               // callback série (interruption)
+
+void TaskTraitementMessageSerie(void *pvParameters); // traite les commandes série
+void TaskMesureTemperatureTc74(void *pvParameters);  // mesure temp. panneau (TC74)
+void TaskMesurePointVI(void *pvParameters);          // mesure un seul point VI
+void TaskEnvoiMessageCan(void *pvParameters);        // envoie les messages CAN en attente
+void TaskEnvoiNumCarte(void *pvParameters);          // répond aux demandes d'identification
+void TaskMesureCourbeVI(void *pvParameters);         // trace la courbe VI complète
+
+void MesureVI(PointDeMesure_t *point); // mesure un point VI (tension + courant)
