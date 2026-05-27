@@ -52,6 +52,8 @@ void setup(){
 	}
 
 	CAN.onReceive(onReceiveCan);
+	pinMode(PIN_SELECTION_MULTIPLEXEUR_A,OUTPUT);
+	pinMode(PIN_SELECTION_MULTIPLEXEUR_B,OUTPUT);
 	pinMode(PIN_SELECTION_MULTIPLEXEUR_C,OUTPUT);
 
 	digitalWrite(PIN_SELECTION_MULTIPLEXEUR_A,LOW);
@@ -171,12 +173,13 @@ void mesure_string(char num_string){
 		mesure[i] = lecture_tension_multiplexeur(num_string) * facteur;
 	}
 	Serial.printf("STRING : %d \n\r tension 1 : %2.2f \n\r tension 2 : %2.2f\n\r tension 3 : %2.2f\n\r tension 4 : %2.2f\n\r tension 5 : %2.2f\n\r courant : %2.2f\n\r ",num_string,mesure[0],mesure[1],mesure[2],mesure[3],mesure[4],mesure[5]);
-	txMsg.len = 2;
+	txMsg.len = 3;
 	txMsg.id = 51;
 	for (int i =0 ; i<6 ; i++){
-		txMsg.data[0] = i;
-		txMsg.data[1] = (int) mesure[i] << 8;
-		txMsg.data[2] = (int) mesure[i] % 256;
+		int valeur = (int)(mesure[i] * 100); // encodage x100, comme le reste du projet
+		txMsg.data[0] = i;                    // indice : 0-4 = tensions, 5 = courant
+		txMsg.data[1] = valeur / 256;         // octet fort
+		txMsg.data[2] = valeur % 256;         // octet faible
 		xQueueSend(xBalTxCanMsg,&txMsg,portMAX_DELAY);
 	}
 }

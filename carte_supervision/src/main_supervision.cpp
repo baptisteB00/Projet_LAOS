@@ -12,7 +12,7 @@ typedef struct CANMessage
 } CANMessage;
 
 CANMessage rxMsg;
-bool canAvailable = false;
+volatile bool canAvailable = false;
 
 void onReceive(int packetSize);
 void reception(char ch);
@@ -25,7 +25,7 @@ void setup()
 
   Serial.println("CAN Receiver");
 
-  // start the CAN bus at 1000 kbps
+  // start the CAN bus at 10 kbps
   if (!CAN.begin(10E3))
   {
     Serial.println("Starting CAN failed!");
@@ -51,7 +51,7 @@ void loop()
     switch (rxMsg.id)
     {
 
-    case CAN_ID_DEBUT_TRANSMITION:
+    case CAN_ID_DEBUT_TRANSMISSION:
       Serial.println("0");
       break;
 
@@ -59,13 +59,17 @@ void loop()
       Serial.println("99");
       break;
 
-    case CAN_ID_DEMANDE_NUM_CARTE:
+    case CAN_ID_RENVOI_NUM_CARTE:
     numero_carte_recu = rxMsg.data[0];
     Serial.printf("0;%d\n\r", numero_carte_recu);
     break;
 
-    case CAN_ID_DEMANDE_TEMP_PANNEAU:
+    case CAN_ID_RENVOI_TEMP_PANNEAU:
       temperature_panneau = rxMsg.data[1];
+      if (rxMsg.data[0] == 0) // data[0]=0 -> température négative (signe envoyé par la carte VI)
+      {
+        temperature_panneau = -temperature_panneau;
+      }
       numero_carte = rxMsg.data[2];
       Serial.printf("2;%2d;%d", numero_carte, temperature_panneau);
       break;
@@ -87,11 +91,7 @@ void loop()
       break;
 
     case CAN_ID_RENVOI_TEMPERATURE:
-      temperature_ext = (rxMsg.data[1] * 256 + rxMsg.data[2]) / 100.0f;
-      if (rxMsg.data[0] == 0)
-      {
-        temperature_ext = -temperature_ext;
-      }
+      temperature_ext = (rxMsg.data[0] * 256 + rxMsg.data[1]) / 100.0f;
       Serial.printf("12;%.2f", temperature_ext);
       Serial.println();
 

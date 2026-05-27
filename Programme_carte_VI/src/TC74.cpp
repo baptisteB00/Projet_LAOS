@@ -52,12 +52,9 @@ bool TC74::isStandby(){
   _wire->endTransmission(false);
   _wire->requestFrom(_adr,byte(1));
   if(_wire->available()){
-    if(_wire->read() == 0x40 || _wire->read() == 0x00){ //0x00 or 0x40
-      _wire->endTransmission();
-      return false;
-    } else {
-      _wire->endTransmission();
-      return true;
-    }
+    uint8_t config = _wire->read(); //un seul read : l'octet de configuration
+    _wire->endTransmission();
+    return (config & 0x80) != 0;    //bit D7 = 1 -> mode STANDBY
   }
+  return true; //pas de reponse du capteur : considere comme non pret
 }
