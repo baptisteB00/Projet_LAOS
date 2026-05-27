@@ -1,5 +1,5 @@
 /**
- * @file main2.cpp
+ * @file main_carte_mesure_tension.cpp
  * @brief Carte Mesure Tension String – lecture des tensions/courant via multiplexeur.
  *
  * Mesure les tensions des 5 branches (strings) et le courant du champ solaire

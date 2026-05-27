@@ -1,5 +1,5 @@
 /**
- * @file main_carte_VI_RTOS.cpp
+ * @file main_carte_vi.cpp
  * @brief Carte Mesure I-V – caractérisation courant-tension d'un panneau solaire.
  *
  * Mesure la courbe I-V en faisant varier le rapport cyclique PWM (0–100 %)
@@ -17,7 +17,7 @@
  * | TaskEnvoiNumCarte | 5 | 2048 | Répond aux demandes d'identification |
  */
 
-#include "main_carte_VI_RTOS.h"
+#include "main_carte_vi.h"
 
 /* ---- Coefficients de correction matérielle (un jeu par carte) ------ */
 float facteurTension[5]   = {-0.00806, -0.00126, -0.00847, -0.00955, -0.01900};

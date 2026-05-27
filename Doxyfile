@@ -4,10 +4,10 @@ PROJECT_NUMBER         = "1.0"
 
 OUTPUT_DIRECTORY       = docs/doxygen
 
-INPUT                  = CarteAlimentation/src \
+INPUT                  = carte_alimentation/src \
                          carte_meteo/src \
-                         Programme_carte_VI/src \
-                         programme_carte_mesure_tension/src \
+                         carte_vi/src \
+                         carte_mesure_tension/src \
                          carte_supervision/src
 
 RECURSIVE              = YES

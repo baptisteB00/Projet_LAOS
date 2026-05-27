@@ -1,5 +1,5 @@
 /**
- * @file main_carte_VI_RTOS.h
+ * @file main_carte_vi.h
  * @brief Carte Mesure I-V – définitions des broches, drapeaux FreeRTOS,
  *        structures de données et déclarations des fonctions.
  */

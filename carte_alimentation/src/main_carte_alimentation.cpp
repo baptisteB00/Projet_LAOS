@@ -1,5 +1,5 @@
 /**
- * @file main_carte_alim.cpp
+ * @file main_carte_alimentation.cpp
  * @brief Carte Alimentation – contrôle du relais et des LEDs d'état.
  *
  * Contrôle le relais principal qui alimente le panneau solaire et signale

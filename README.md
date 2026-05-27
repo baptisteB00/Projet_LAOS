@@ -37,10 +37,10 @@ graph TD
 
 | Carte | Dossier | N° carte | Rôle principal | FreeRTOS |
 |-------|---------|:--------:|----------------|:--------:|
-| Alimentation | `CarteAlimentation/` | 12 | Contrôle relais + LEDs état | Non |
+| Alimentation | `carte_alimentation/` | 12 | Contrôle relais + LEDs état | Non |
 | Météo | `carte_meteo/` | 10 | Température, humidité, irradiance | Oui – 6 tâches |
-| Mesure I-V | `Programme_carte_VI/` | 1 à 5 | Courbe courant-tension du panneau | Oui – 6 tâches |
-| Mesure tension string | `programme_carte_mesure_tension/` | 13 | Tensions/courant sur 5 branches | Non |
+| Mesure I-V | `carte_vi/` | 1 à 5 | Courbe courant-tension du panneau | Oui – 6 tâches |
+| Mesure tension string | `carte_mesure_tension/` | 13 | Tensions/courant sur 5 branches | Non |
 | Supervision | `carte_supervision/` | – | Relais série vers CAN | Non |
 
 ---
@@ -261,23 +261,23 @@ Toutes les cartes sont câblées en parallèle sur le bus CAN à **10 kbps**. Aj
 
 ```
 Projet_LAOS/
-├── CarteAlimentation/               # Contrôle relais alimentation
+├── carte_alimentation/              # Contrôle relais alimentation
 │   └── src/
-│       ├── main_carte_alim.cpp
+│       ├── main_carte_alimentation.cpp
 │       └── can_id.h
 ├── carte_meteo/                     # Mesures météorologiques (FreeRTOS)
 │   └── src/
-│       ├── main_carte_meteo_RTOS.cpp
+│       ├── main_carte_meteo.cpp
 │       └── can_id.h
-├── Programme_carte_VI/              # Caractérisation I-V panneau (FreeRTOS)
+├── carte_vi/                        # Caractérisation I-V panneau (FreeRTOS)
 │   └── src/
-│       ├── main_carte_VI_RTOS.cpp
-│       ├── main_carte_VI_RTOS.h
+│       ├── main_carte_vi.cpp
+│       ├── main_carte_vi.h
 │       ├── TC74.cpp / TC74.h
 │       └── can_id.h
-├── programme_carte_mesure_tension/  # Mesure tensions strings
+├── carte_mesure_tension/            # Mesure tensions strings
 │   └── src/
-│       └── main2.cpp
+│       └── main_carte_mesure_tension.cpp
 ├── carte_supervision/               # Interface série vers CAN
 │   └── src/
 │       └── main_supervision.cpp

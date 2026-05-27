@@ -1,4 +1,4 @@
-#include "TC74.h"
+#include "tc74.h"
 
 TC74::TC74(uint8_t adr){
   _adr = adr;

@@ -74,8 +74,8 @@ pio device monitor --baud 115200
 
 ```bash
 # Depuis la racine du projet
-for dir in CarteAlimentation carte_meteo Programme_carte_VI \
-           programme_carte_mesure_tension carte_supervision; do
+for dir in carte_alimentation carte_meteo carte_vi \
+           carte_mesure_tension carte_supervision; do
     echo "=== Flash $dir ==="
     cd $dir && pio run --target upload && cd ..
 done

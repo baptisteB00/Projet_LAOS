@@ -1,5 +1,5 @@
 /**
- * @file main_carte_meteo_RTOS.cpp
+ * @file main_carte_meteo.cpp
  * @brief Carte Météo – mesure température, humidité et irradiance solaire.
  *
  * Mesure les conditions météorologiques autour du panneau solaire via :
