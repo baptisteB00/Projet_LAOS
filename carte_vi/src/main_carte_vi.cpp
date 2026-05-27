@@ -460,8 +460,13 @@ void TaskMesureTemperatureTc74(void *pvParameters)
         float temperature = tc74.readTemperature('C');
 
         /* Encodage du signe et de la valeur (valeur absolue ; le signe est dans data[0]) */
-        txMsg.data[0] = (temperature > 0) ? 1 : 0;
-        txMsg.data[1] = (temperature < 0) ? (char)(-temperature) : (char)temperature;
+        if(temperature>0){
+            txMsg.data[0] = 1;
+            txMsg.data[1] = (char) temperature;
+        }else{
+            txMsg.data[0] = 0;
+            txMsg.data[1] = (char) -temperature;
+        }
 
         /* Dépôt dans la file CAN */
         xSemaphoreTake(mutexCanLink, portMAX_DELAY);
