@@ -1,0 +1,45 @@
+PROJECT_NAME           = "Projet LAOS"
+PROJECT_BRIEF          = "Système embarqué de surveillance de panneaux solaires – ESP32 + CAN + FreeRTOS"
+PROJECT_NUMBER         = "1.0"
+
+OUTPUT_DIRECTORY       = docs/doxygen
+
+INPUT                  = CarteAlimentation/src \
+                         carte_meteo/src \
+                         Programme_carte_VI/src \
+                         programme_carte_mesure_tension/src \
+                         carte_supervision/src
+
+RECURSIVE              = YES
+FILE_PATTERNS          = *.cpp *.h
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_COLORSTYLE        = LIGHT
+GENERATE_TREEVIEW      = YES
+TREEVIEW_WIDTH         = 250
+GENERATE_LATEX         = NO
+
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MULTILINE_CPP_IS_BRIEF = NO
+TAB_SIZE               = 4
+
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+
+EXCLUDE_PATTERNS       = */.pio/* */.cache/*
+
+HAVE_DOT               = NO
+
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = YES
+CLASS_DIAGRAMS         = YES
+SORT_MEMBER_DOCS       = YES
+
+ALPHABETICAL_INDEX     = YES
