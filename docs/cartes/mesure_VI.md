@@ -12,7 +12,7 @@ Il peut exister **jusqu'à 5 cartes VI** sur le bus, numérotées de 1 à 5 via 
 
 | Composant | Interface | Broche GPIO | Rôle |
 |-----------|-----------|:-----------:|------|
-| DIP switch BP1–BP4 | GPIO INPUT | 25, 26, 27, 14 | Numéro de carte (bits 0 à 3) |
+| DIP switch BP1 à BP4 | GPIO INPUT | 25, 26, 27, 14 | Numéro de carte (bits 0 à 3) |
 | Relais panneau | GPIO OUTPUT | 18 | Connexion/déconnexion du panneau |
 | PWM charge | LEDC canal 0 | 19 | Rapport cyclique sur résistance de charge |
 | ADC tension | ADC | GPIO 32 | Lecture tension panneau |
@@ -25,14 +25,14 @@ Il peut exister **jusqu'à 5 cartes VI** sur le bus, numérotées de 1 à 5 via 
 ## Paramètres de mesure
 
 | Paramètre | Valeur | Description |
-|-----------|--------|-------------|
+|-----------|:------:|-------------|
 | `MOYENNE` | 100 | Nombre de lectures ADC moyennées par point |
-| `R_mesure` | 22 Ω | Résistance de mesure du courant |
-| `NB_POINT_V0_CONST` | 15 | Points côté tension constante (V0) |
-| `NB_POINT_Icc_CONST` | 8 | Points côté courant constant (Icc) |
+| `R_mesure` | 22 Ohm | Résistance de mesure du courant |
+| `NB_POINT_V0_CONST` | 15 | Points côté tension constante V0 |
+| `NB_POINT_Icc_CONST` | 8 | Points côté courant constant Icc |
 | `NB_POINT` | 23 | Total de points sur la courbe |
-| `FREQUENCE` PWM | 50 000 Hz | Fréquence de la PWM |
-| `RESOlUTION` PWM | 9 bits | Plage 0–511 |
+| Fréquence PWM | 50 000 Hz | Fréquence de la PWM |
+| Résolution PWM | 9 bits | Plage 0 à 511 |
 
 ---
 
@@ -57,50 +57,50 @@ Il peut exister **jusqu'à 5 cartes VI** sur le bus, numérotées de 1 à 5 via 
 | `flagsMessageSerial` | Event Group | – | Signal réception série |
 | `mutexSerialLink` | Mutex | – | Accès exclusif à `Serial.printf()` |
 | `mutexCanLink` | Mutex | – | Accès exclusif à la file CAN |
-| `balTxCanMsg` | Queue | 20 messages | Messages CAN à envoyer |
-| `balRapportCyclique` | Queue | 10 points | Points I-V demandés par la tâche série |
+| `balTxCanMsg` | Queue | 20 msg | Messages CAN à envoyer |
+| `balRapportCyclique` | Queue | 10 pts | Points I-V demandés par la tâche série |
 
 ---
 
 ## Bits d'événements
 
 | Bit | Constante | Source | Tâche réveillée |
-|-----|-----------|--------|-----------------|
-| BIT1 | `FLAG_CAN_TEMPERATURE` | ISR CAN (ID=12, n°carte ciblé) | `TaskMesureTemperatureTc74` |
-| BIT2 | `FLAG_CAN_VI_ALL` | ISR CAN (ID=11, n°carte ciblé) | `TaskMesureCourbeVI` |
-| BIT3 | `FLAG_CAN_NUM_CARTE` | ISR CAN (ID=0) | `TaskEnvoiNumCarte` |
+|:---:|-----------|--------|-----------------|
+| BIT1 | `FLAG_CAN_TEMPERATURE` | ISR CAN ID=12 | `TaskMesureTemperatureTc74` |
+| BIT2 | `FLAG_CAN_VI_ALL` | ISR CAN ID=11 | `TaskMesureCourbeVI` |
+| BIT3 | `FLAG_CAN_NUM_CARTE` | ISR CAN ID=0 | `TaskEnvoiNumCarte` |
 | BIT10 | `BIT_SERIAL_MSG` | ISR UART | `TaskTraitementMessageSerie` |
-| BIT11 | `FLAG_SERIE_TEMPERATURE` | Tâche série (cmd "T") | `TaskMesureTemperatureTc74` |
-| BIT12 | `FLAG_SERIE_VI_ALL` | Tâche série (cmd "A") | `TaskMesureCourbeVI` |
+| BIT11 | `FLAG_SERIE_TEMPERATURE` | Tâche série cmd T | `TaskMesureTemperatureTc74` |
+| BIT12 | `FLAG_SERIE_VI_ALL` | Tâche série cmd A | `TaskMesureCourbeVI` |
 
 ---
 
-## Algorithme de mesure d'un point I-V (`MesureVI`)
+## Algorithme de mesure d'un point I-V
 
 ```mermaid
-flowchart LR
-    A["Entrée:\npoint.alpha (0–100%)"] --> B["Fermer relais\ndigitalWrite HIGH"]
-    B --> C["Appliquer PWM\nalpha/100 × 512"]
-    C --> D["Attendre 100 ms\n(stabilisation)"]
-    D --> E["Moyenner 100 lectures ADC\nTension + Courant"]
-    E --> F["Calculer V et I bruts\nfacteur diviseur de tension"]
-    F --> G["Ouvrir relais\ndigitalWrite LOW"]
-    G --> H["Corriger non-linéarité\nV = V × (V×facteur + cste)\nI = I × (I×facteur + cste)"]
-    H --> I["Sortie:\npoint.tension, point.courant"]
+flowchart TD
+    A["Entrée: point.alpha 0 a 100%"] --> B["Fermer relais<br/>digitalWrite HIGH"]
+    B --> C["Appliquer PWM<br/>alpha/100 x 512"]
+    C --> D["Attendre 100 ms<br/>stabilisation"]
+    D --> E["Moyenner 100 lectures ADC<br/>Tension + Courant"]
+    E --> F["Calculer V et I bruts<br/>facteur diviseur de tension"]
+    F --> G["Ouvrir relais<br/>digitalWrite LOW"]
+    G --> H["Corriger non-linearite<br/>V = V x facteur + constante<br/>I = I x facteur + constante"]
+    H --> I["Sortie: point.tension et point.courant"]
 ```
 
 ---
 
-## Algorithme de la courbe I-V complète (`TaskMesureCourbeVI`)
+## Algorithme de la courbe I-V complète
 
 ```mermaid
 flowchart TD
-    START["Déclenchement\n(CAN ID=11 ou cmd 'A')"] --> ICC["Mesure Icc\nalpha=100%"]
-    ICC --> V0["Mesure V0\nalpha=0%"]
-    V0 --> REPARTITION["Répartition logarithmique\ndes 23 points cibles"]
-    REPARTITION --> ALPHA["Calcul alpha pour chaque point\nR_eq = V/I\nalpha = (1 - R_eq/R_mesure) × 100"]
-    ALPHA --> MESURE["Mesure réelle\nde chaque point"]
-    MESURE --> ENVOI["Envoi CAN\nDEBUT + 23×RENVOI_MESURE_VI + FIN"]
+    START["Déclenchement CAN ID=11 ou cmd A"] --> ICC["Mesure Icc<br/>alpha=100%"]
+    ICC --> V0["Mesure V0<br/>alpha=0%"]
+    V0 --> REP["Répartition logarithmique<br/>des 23 points cibles"]
+    REP --> ALPHA["Calcul alpha pour chaque point<br/>R_eq = V/I"]
+    ALPHA --> MESURE["Mesure réelle de chaque point"]
+    MESURE --> ENVOI["Envoi CAN<br/>DEBUT + 23 trames + FIN"]
 ```
 
 ### Répartition logarithmique des points
@@ -111,23 +111,22 @@ La distribution logarithmique concentre les points là où la courbe I-V varie l
 - **8 derniers points** (`i >= NB_POINT_V0_CONST`) : courant fixé à Icc, tension varie de Icc.V vers V0
 
 ```
-courant[i] = V0.I + (Icc.I - V0.I) × log10(1 + i×9 / (NB_POINT_V0_CONST - 1))
+courant[i] = V0.I + (Icc.I - V0.I) x log10(1 + i*9 / (NB_POINT_V0_CONST - 1))
 ```
 
 ---
 
 ## Correction de non-linéarité
 
-Chaque carte a ses propres coefficients de correction stockés dans des tableaux indexés par `numCarte - 1` :
+Chaque carte a ses propres coefficients indexés par `numCarte - 1` :
 
 ```cpp
-// Formule : mesure_corrigee = brut × (brut × facteur + constante)
 tension = tensionBrute * (tensionBrute * facteurTension[numCarte-1] + constanteTension[numCarte-1]);
 courant = courantBrut  * (courantBrut  * facteurCourant[numCarte-1] + constanteCourant[numCarte-1]);
 ```
 
-| Carte n° | `facteurTension` | `constanteTension` | `facteurCourant` | `constanteCourant` |
-|:--------:|:----------------:|:-----------------:|:---------------:|:-----------------:|
+| N° carte | facteurTension | constanteTension | facteurCourant | constanteCourant |
+|:--------:|:--------------:|:----------------:|:--------------:|:----------------:|
 | 1 | -0.00806 | 1.13 | 0.00188 | 1.01 |
 | 2 | -0.00126 | 1.210 | -0.0154 | 1.11 |
 | 3 | -0.00847 | 1.14 | -0.0066 | 1.04 |

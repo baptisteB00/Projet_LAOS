@@ -25,22 +25,20 @@ Contrôle le relais principal qui connecte ou déconnecte le panneau solaire du 
 
 ```mermaid
 flowchart TD
-    SETUP["setup()\n- Démarrage CAN\n- Config broches GPIO\n- Enregistrement callback OnReceiveCan"]
+    SETUP["setup()<br/>Démarrage CAN<br/>Config broches GPIO<br/>Callback OnReceiveCan"] --> LOOP
 
-    LOOP["loop()\nVérifie canAvailable"]
+    ISR["OnReceiveCan()<br/>interruption CAN<br/>Copie rxMsg<br/>lève canAvailable"] --> LOOP
 
-    ISR["OnReceiveCan()\n(interruption CAN)\nCopie rxMsg, lève canAvailable"]
+    LOOP["loop()<br/>Vérifie canAvailable"]
 
-    SERIAL["serialEvent()\n(interruption UART)\nAppelle Reception()"]
+    SERIAL["serialEvent()<br/>interruption UART<br/>Appelle Reception()"]
 
-    RECEPTION["Reception()\nAnaparse la chaîne\nAppelle ControleRelais()"]
+    RECEPTION["Reception()<br/>Parse la chaine<br/>Appelle ControleRelais()"]
 
-    RELAIS["ControleRelais(onOff)\nCommande GPIO Relais\net LEDs état"]
+    RELAIS["ControleRelais(onOff)<br/>Commande GPIO Relais<br/>et LEDs état"]
 
-    SETUP --> LOOP
-    ISR --> LOOP
-    LOOP -->|"CAN_ID_DEMANDE_NUM_CARTE"| DELAY["delay(10 × 12)\nRéponse CAN ID=10"]
-    LOOP -->|"CAN_ID_DEMANDE_ALIMENTATION"| RELAIS
+    LOOP -->|CAN_ID_DEMANDE_NUM_CARTE| DELAY["delay 120 ms<br/>Réponse CAN ID=10"]
+    LOOP -->|CAN_ID_DEMANDE_ALIMENTATION| RELAIS
     SERIAL --> RECEPTION --> RELAIS
 ```
 
@@ -49,7 +47,7 @@ flowchart TD
 ## Messages CAN traités
 
 | ID reçu | Nom | Action |
-|---------|-----|--------|
+|:-------:|-----|--------|
 | 0 | `CAN_ID_DEMANDE_NUM_CARTE` | Attend 120 ms, répond ID=10 avec `data[0]=12` |
 | 1 | `CAN_ID_DEMANDE_ALIMENTATION` | Appelle `ControleRelais(data[0])` |
 
@@ -78,14 +76,14 @@ flowchart TD
 La callback `OnReceiveCan()` s'exécute dans une **interruption**. Elle ne fait que copier le message dans `rxMsg` et lever le drapeau `canAvailable`. Tout le traitement se fait dans `loop()` en dehors de l'interruption.
 
 ```cpp
-// ISR – léger
+// ISR – copie uniquement
 void OnReceiveCan(int packetSize) {
     rxMsg.id  = CAN.packetId();
     // ... copie des données ...
     canAvailable = true;  // signal pour loop()
 }
 
-// loop() – traitement réel
+// loop() – traitement réel hors interruption
 if (canAvailable == true) {
     canAvailable = false;
     // traitement du message
