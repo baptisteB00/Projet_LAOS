@@ -6,15 +6,6 @@
  * sur une résistance de charge, puis en lisant tension et courant via ADC.
  * Le numéro de carte (1 à 5) est lu au démarrage sur un DIP switch 4 bits.
  *
- * **Architecture FreeRTOS – 6 tâches :**
- * | Tâche | Prio | Pile | Rôle |
- * |-------|------|------|------|
- * | TaskEnvoiMessageCan | 10 | 2048 | Envoie les trames CAN de `balTxCanMsg` |
- * | TaskTraitementMessageSerie | 9 | 3072 | Interprète les commandes série |
- * | TaskMesureCourbeVI | 5 | 4096 | Trace la courbe complète (23 points) |
- * | TaskMesurePointVI | 5 | 3072 | Mesure un point à alpha fixé |
- * | TaskMesureTemperatureTc74 | 5 | 3072 | Lecture TC74 via I2C |
- * | TaskEnvoiNumCarte | 5 | 2048 | Répond aux demandes d'identification |
  */
 
 #include "main_carte_vi.h"
@@ -25,17 +16,15 @@ float constanteTension[5] = { 1.13,     1.210,    1.14,     1.6,      1.31   };
 float facteurCourant[5]   = { 0.00188, -0.0154,  -0.0066,  -0.0138,  -0.00653};
 float constanteCourant[5] = { 1.01,     1.11,     1.04,     1.07,     1.05   };
 
-/* ---- Objets FreeRTOS globaux --------------------------------------- */
-EventGroupHandle_t flagsSystemeEvent;   // bits d'événements principaux
-EventGroupHandle_t flagsMessageSerial;  // bit signalant un message série reçu
-SemaphoreHandle_t  mutexSerialLink;     // protège l'accès à Serial.printf()
-SemaphoreHandle_t  mutexCanLink;        // protège l'accès à la file CAN
-QueueHandle_t      balTxCanMsg;         // file d'attente des messages CAN à envoyer
-QueueHandle_t      balRapportCyclique;  // file d'attente des points VI à mesurer
-
 /* ---- Numéro de cette carte (lu sur le DIP switch au démarrage) ----- */
 unsigned char numCarte = 0;
-
+/* ---- Déclaration du capteur tc74 en global pour etre accesible dans le setup et dans a fonction de mesure ---- */
+TC74 tc74(0x48);
+CanMessage_t rxMsg;
+bool canAvailable = false;
+void MesureCourbeVI(void);
+void MesureTemperatureTc74(void);
+void EnvoiNumCarte(void);
 /* ==================================================================== */
 /*  SETUP – initialisation matérielle et création des tâches FreeRTOS   */
 /* ==================================================================== */
@@ -82,30 +71,29 @@ void setup()
     Serial.onReceive(OnReceiveSerial);
     CAN.onReceive(OnReceiveCan);
 
-    /* Création des objets FreeRTOS */
-    flagsSystemeEvent  = xEventGroupCreate();
-    flagsMessageSerial = xEventGroupCreate();
-    mutexSerialLink    = xSemaphoreCreateMutex();
-    mutexCanLink       = xSemaphoreCreateMutex();
-    balTxCanMsg        = xQueueCreate(20, sizeof(CanMessage_t));
-    balRapportCyclique = xQueueCreate(10, sizeof(PointDeMesure_t));
-
-    /* Création des tâches FreeRTOS
-     *  xTaskCreate(fonction, nom, taille_pile, parametre, priorite, handle)
-     *  Le paramètre (numCarte) est passé via un cast void* ; chaque tâche
-     *  le récupère avec (char)(intptr_t)pvParameters */
-    xTaskCreate(TaskEnvoiMessageCan,        "TACHE_TX_CAN",          2048, (void *)(intptr_t)numCarte, 10, NULL);
-    xTaskCreate(TaskEnvoiNumCarte,          "TACHE_NUM_CARTE",        2048, (void *)(intptr_t)numCarte,  5, NULL);
-    xTaskCreate(TaskMesurePointVI,          "TACHE_POINT_VI",         3072, (void *)(intptr_t)numCarte,  5, NULL);
-    xTaskCreate(TaskMesureTemperatureTc74,  "TACHE_TEMPERATURE",      3072, (void *)(intptr_t)numCarte,  5, NULL);
-    xTaskCreate(TaskTraitementMessageSerie, "TACHE_TRAITEMENT_SERIE", 3072, (void *)(intptr_t)numCarte,  9, NULL);
-    xTaskCreate(TaskMesureCourbeVI,         "TACHE_MESURE_COURBE_VI", 4096, (void *)(intptr_t)numCarte,  5, NULL);
+    tc74.begin();
 }
 
 /* FreeRTOS gère la boucle principale ; loop() ne sert plus à rien */
 void loop()
 {
-    vTaskDelay(portMAX_DELAY);
+    if(canAvailable == true){
+        canAvailable = false;
+        CanMessage_t localRxMsg = rxMsg;
+
+        if ((localRxMsg.id == CAN_ID_DEMANDE_MESURE_VI) && (localRxMsg.data[0] == numCarte))
+        {
+            MesureCourbeVI();
+        }
+        else if ((localRxMsg.id == CAN_ID_DEMANDE_TEMP_PANNEAU) && (localRxMsg.data[0] == numCarte))
+        {
+            MesureTemperatureTc74();
+        }
+        else if (localRxMsg.id == CAN_ID_DEMANDE_NUM_CARTE)
+        {
+            EnvoiNumCarte();
+        }
+    }
 }
 
 /**
@@ -118,113 +106,70 @@ void loop()
  */
 void OnReceiveCan(int packetSize)
 {
-    CanMessage_t localRxMsg;
-    BaseType_t higherPriorityTaskWoken = pdFALSE; // sera mis à pdTRUE si une tâche de haute priorité doit être réveillée
-
-    /* Lecture du message CAN */
-    localRxMsg.id  = CAN.packetId();
-    localRxMsg.len = CAN.packetDlc();
-    int i = 0;
-    while (CAN.available())
-    {
-        localRxMsg.data[i] = CAN.read();
-        i++;
+    rxMsg.id = CAN.packetId();
+    rxMsg.len = CAN.packetDlc();
+    for (int i = 0 ; CAN.available() ; i++){
+        rxMsg.data[i] = CAN.read();
     }
-
-    /* Selon l'identifiant CAN et si le message nous est destiné,
-     * on lève le bit d'événement correspondant pour réveiller la bonne tâche */
-    if ((localRxMsg.id == CAN_ID_DEMANDE_MESURE_VI) && (localRxMsg.data[0] == numCarte))
-    {
-        xEventGroupSetBitsFromISR(flagsSystemeEvent, FLAG_CAN_VI_ALL, &higherPriorityTaskWoken);
-    }
-    else if ((localRxMsg.id == CAN_ID_DEMANDE_TEMP_PANNEAU) && (localRxMsg.data[0] == numCarte))
-    {
-        xEventGroupSetBitsFromISR(flagsSystemeEvent, FLAG_CAN_TEMPERATURE, &higherPriorityTaskWoken);
-    }
-    else if (localRxMsg.id == CAN_ID_DEMANDE_NUM_CARTE)
-    {
-        xEventGroupSetBitsFromISR(flagsSystemeEvent, FLAG_CAN_NUM_CARTE, &higherPriorityTaskWoken);
-    }
-
-    /* Si une tâche de plus haute priorité a été réveillée, on lui donne la main immédiatement */
-    portYIELD_FROM_ISR(higherPriorityTaskWoken);
+    canAvailable = true;
 }
 
+void EnvoiMessageCan(CanMessage_t message){
+    CAN.beginPacket(message.id);
+    CAN.write(message.data,message.len);
+    CAN.endPacket();
+}
 /**
  * @brief Callback UART – appelée en ISR à chaque réception série.
  *
  * Lève `BIT_SERIAL_MSG` dans `flagsMessageSerial` pour réveiller
  * `TaskTraitementMessageSerie`.
  */
-void OnReceiveSerial()
-{
-    BaseType_t higherPriorityTaskWoken = pdFALSE;
-    xEventGroupSetBitsFromISR(flagsMessageSerial, BIT_SERIAL_MSG, &higherPriorityTaskWoken);
-    portYIELD_FROM_ISR(higherPriorityTaskWoken);
-}
-
-/**
- * @brief Tâche FreeRTOS – traitement des commandes série (priorité 9).
- *
- * Attend `BIT_SERIAL_MSG`, lit les caractères et exécute :
- * - `"M <alpha>"` → envoie un point dans `balRapportCyclique`
- * - `"A"` → lève `FLAG_SERIE_VI_ALL`
- * - `"T"` → lève `FLAG_SERIE_TEMPERATURE`
- * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
- */
-void TaskTraitementMessageSerie(void *pvParameters)
+void OnReceiveSerial(void )
 {
     String chaine   = "";  // accumule les caractères jusqu'au retour chariot
     String commande;
     String valeur;
 
-    while (1)
+    while (Serial.available() > 0)
     {
-        /* Mise en sommeil jusqu'à réception d'un caractère série */
-        xEventGroupWaitBits(flagsMessageSerial, BIT_SERIAL_MSG, pdTRUE, pdTRUE, portMAX_DELAY);
+        char ch = Serial.read();
 
-        /* Lecture caractère par caractère */
-        while (Serial.available() > 0)
+        if (ch == '\r' || ch == '\n') // fin de commande
         {
-            char ch = Serial.read();
-
-            if (ch == '\r' || ch == '\n') // fin de commande
+            if (chaine.length() > 0)
             {
-                if (chaine.length() > 0)
+                /* Découpage "COMMANDE VALEUR" */
+                int index = chaine.indexOf(' ');
+                if (index == -1)
                 {
-                    /* Découpage "COMMANDE VALEUR" */
-                    int index = chaine.indexOf(' ');
-                    if (index == -1)
-                    {
-                        commande = chaine;
-                        valeur   = "";
-                    }
-                    else
-                    {
-                        commande = chaine.substring(0, index);
-                        valeur   = chaine.substring(index + 1);
-                    }
-
-                    /* Exécution de la commande */
-                    if (commande == "M")
-                    {
-                        /* Envoie un point à mesurer dans la file d'attente */
-                        PointDeMesure_t point;
-                        point.alpha = valeur.toFloat();
-                        xQueueSend(balRapportCyclique, &point, portMAX_DELAY);
-                    }
-                    else if (commande == "A")
-                        xEventGroupSetBits(flagsSystemeEvent, FLAG_SERIE_VI_ALL);
-                    else if (commande == "T")
-                        xEventGroupSetBits(flagsSystemeEvent, FLAG_SERIE_TEMPERATURE);
-
-                    chaine = ""; // réinitialisation du buffer
+                    commande = chaine;
+                    valeur   = "";
                 }
+                else
+                {
+                    commande = chaine.substring(0, index);
+                    valeur   = chaine.substring(index + 1);
+                }
+
+                /* Exécution de la commande */
+                if (commande == "M")
+                {
+                    PointDeMesure_t point;
+                    point.alpha = valeur.toInt();
+                    MesureVI(&point);
+                }
+                else if (commande == "A")
+                    MesureCourbeVI();
+                else if (commande == "T")
+                    MesureTemperatureTc74();
+
+                chaine = ""; // réinitialisation du buffer
             }
-            else
-            {
-                chaine += ch; // accumulation des caractères
-            }
+        }
+        else
+        {
+            chaine += ch; // accumulation des caractères
         }
     }
 }
@@ -249,7 +194,7 @@ void MesureVI(PointDeMesure_t *point)
     ledcWrite(CANAL, (int)(point->alpha / 100.0 * 512));
 
     /* Étape 3 : attente de stabilisation */
-    vTaskDelay(pdMS_TO_TICKS(100));
+    delay(100);
 
     /* Étape 4 : accumulation de MOYENNE lectures pour réduire le bruit */
     float sommeCourant = 0;
@@ -291,236 +236,147 @@ void MesureVI(PointDeMesure_t *point)
  * 5. Envoie la séquence CAN : DEBUT + 23×`CAN_ID_RENVOI_MESURE_VI` + FIN
  * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
  */
-void TaskMesureCourbeVI(void *pvParameters)
+void MesureCourbeVI(void )
 {
     PointDeMesure_t courbeVI[NB_POINT]; // tableau de tous les points de la courbe
     PointDeMesure_t icc, v0;            // points aux extrêmes : court-circuit et circuit ouvert
     CanMessage_t txMsg;
-    txMsg.data[4] = ((unsigned char)(intptr_t)pvParameters); // numéro de carte dans le message
+    txMsg.data[4] = numCarte ;
 
-    while (1)
+    /* --- Étape 1 : mesure des points extrêmes --- */
+    icc.alpha = 100;  // court-circuit : relais fermé, PWM à 100 % → courant maximal
+    MesureVI(&icc);
+
+    v0.alpha = 0;     // circuit ouvert : PWM à 0 % → tension maximale
+    MesureVI(&v0);
+
+    Serial.printf("Icc = %2.2f A, Imin = %2.2f A, V0 = %2.2f V, Vmin = %2.2f V\n",
+                  icc.courant, v0.courant, v0.tension, icc.tension);
+
+    /* --- Étape 2 : répartition logarithmique des points ---
+     *  On utilise log10 pour densifier les points près des extrémités
+     *  où la courbe VI varie le plus rapidement.
+     *
+     *  Première moitié (i < NB_POINT_V0_CONST) : tension fixée à V0, courant varie
+     *  Deuxième moitié (i >= NB_POINT_V0_CONST) : courant fixé à Icc, tension varie */
+    for (int i = 0; i < NB_POINT; i++)
     {
-        /* Attente d'un ordre de mesure (CAN ou série) */
-        xEventGroupWaitBits(flagsSystemeEvent, FLAG_CAN_VI_ALL | FLAG_SERIE_VI_ALL, pdTRUE, pdFALSE, portMAX_DELAY);
-
-        /* --- Étape 1 : mesure des points extrêmes --- */
-        icc.alpha = 100;  // court-circuit : relais fermé, PWM à 100 % → courant maximal
-        MesureVI(&icc);
-
-        v0.alpha = 0;     // circuit ouvert : PWM à 0 % → tension maximale
-        MesureVI(&v0);
-
-        xSemaphoreTake(mutexSerialLink, portMAX_DELAY);
-        Serial.printf("Icc = %2.2f A, Imin = %2.2f A, V0 = %2.2f V, Vmin = %2.2f V\n",
-                      icc.courant, v0.courant, v0.tension, icc.tension);
-        xSemaphoreGive(mutexSerialLink);
-
-        /* --- Étape 2 : répartition logarithmique des points ---
-         *  On utilise log10 pour densifier les points près des extrémités
-         *  où la courbe VI varie le plus rapidement.
-         *
-         *  Première moitié (i < NB_POINT_V0_CONST) : tension fixée à V0, courant varie
-         *  Deuxième moitié (i >= NB_POINT_V0_CONST) : courant fixé à Icc, tension varie */
-        for (int i = 0; i < NB_POINT; i++)
+        if (i < NB_POINT_V0_CONST)
         {
-            if (i < NB_POINT_V0_CONST)
-            {
-                courbeVI[i].tension = v0.tension;
-                courbeVI[i].courant = v0.courant + (icc.courant - v0.courant)
-                                      * log10(1 + (i * 9) / (float)(NB_POINT_V0_CONST - 1));
-            }
-            else
-            {
-                courbeVI[i].tension = icc.tension + (v0.tension - icc.tension)
-                                      * log10(1 + ((i - NB_POINT_V0_CONST) * 9) / (float)(NB_POINT_Icc_CONST - 1));
-                courbeVI[i].courant = icc.courant;
-            }
-            xSemaphoreTake(mutexSerialLink, portMAX_DELAY);
-            Serial.printf("point %d : I = %2.2f A, V = %2.2f V\n", i, courbeVI[i].courant, courbeVI[i].tension);
-            xSemaphoreGive(mutexSerialLink);
+            courbeVI[i].tension = v0.tension;
+            courbeVI[i].courant = v0.courant + (icc.courant - v0.courant)
+                                  * log10(1 + (i * 9) / (float)(NB_POINT_V0_CONST - 1));
         }
-
-        /* --- Étape 3 : calcul du rapport cyclique pour chaque point ---
-         *  On modélise la charge comme une résistance : R_eq = V / I
-         *  Puis on en déduit l'alpha par le rapport de diviseur :
-         *    alpha = (1 - R_eq / R_mesure) * 100 % */
-        for (int i = 0; i < NB_POINT; i++)
+        else
         {
-            if (courbeVI[i].courant == 0.0f)
-            {
-                courbeVI[i].alpha = 0.0f;
-                continue;
-            }
-            float rEq = courbeVI[i].tension / courbeVI[i].courant;
-            courbeVI[i].alpha = (1.0f - (rEq / R_mesure)) * 100.0f;
-            if (courbeVI[i].alpha < 0.0f)   courbeVI[i].alpha = 0.0f;
-            if (courbeVI[i].alpha > 100.0f) courbeVI[i].alpha = 100.0f;
+            courbeVI[i].tension = icc.tension + (v0.tension - icc.tension)
+                                  * log10(1 + ((i - NB_POINT_V0_CONST) * 9) / (float)(NB_POINT_Icc_CONST - 1));
+            courbeVI[i].courant = icc.courant;
         }
-
-        /* --- Étape 4 : mesure réelle de chaque point --- */
-        for (int i = 0; i < NB_POINT; i++)
-        {
-            MesureVI(&courbeVI[i]);
-        }
-
-        /* Affichage des résultats en format CSV pour tracé sur PC */
-        xSemaphoreTake(mutexSerialLink, portMAX_DELAY);
-        Serial.printf("tension,courant,alpha\n");
-        for (int i = 0; i < NB_POINT; i++)
-        {
-            Serial.printf("%.2f,%.2f,%2.2f\n", courbeVI[i].tension, courbeVI[i].courant, courbeVI[i].alpha);
-        }
-        xSemaphoreGive(mutexSerialLink);
-
-        /* --- Étape 5 : envoi des points sur le bus CAN ---
-         *  Protocole : trame DEBUT_TRANSMISSION, puis N trames de données, puis FIN_TRANSMISSION.
-         *  Chaque flottant est encodé sur 2 octets : valeur * 100 → octet fort | octet faible */
-        xSemaphoreTake(mutexCanLink, portMAX_DELAY);
-
-        txMsg.id  = CAN_ID_DEBUT_TRANSMISSION;
-        txMsg.len = 0;
-        xQueueSend(balTxCanMsg, &txMsg, portMAX_DELAY);
-
-        txMsg.id = CAN_ID_RENVOI_MESURE_VI;
-        for (int i = 0; i < NB_POINT; i++)
-        {
-            txMsg.len    = 5;
-            int tensionEncode  = (int)(courbeVI[i].tension * 100.0);
-            int courantEncode  = (int)(courbeVI[i].courant * 100.0);
-            txMsg.data[0] = (unsigned char)((tensionEncode >> 8) % 256); // octet fort tension
-            txMsg.data[1] = (unsigned char)( tensionEncode       % 256); // octet faible tension
-            txMsg.data[2] = (unsigned char)((courantEncode >> 8) % 256); // octet fort courant
-            txMsg.data[3] = (unsigned char)( courantEncode       % 256); // octet faible courant
-            xQueueSend(balTxCanMsg, &txMsg, portMAX_DELAY);
-        }
-
-        txMsg.id  = CAN_ID_FIN_TRANSMISSION;
-        txMsg.len = 0;
-        xQueueSend(balTxCanMsg, &txMsg, portMAX_DELAY);
-
-        xSemaphoreGive(mutexCanLink);
+        Serial.printf("point %d : I = %2.2f A, V = %2.2f V\n", i, courbeVI[i].courant, courbeVI[i].tension);
     }
-}
 
-/**
- * @brief Tâche FreeRTOS – envoi des messages CAN (priorité 10).
- *
- * Seul point d'écriture sur le bus CAN. Toutes les autres tâches déposent
- * leurs messages dans `balTxCanMsg` ; cette tâche les envoie un par un de
- * manière bloquante (`portMAX_DELAY`).
- * @param pvParameters Non utilisé.
- */
-void TaskEnvoiMessageCan(void *pvParameters)
-{
-    CanMessage_t txMsg;
-    while (1)
+    /* --- Étape 3 : calcul du rapport cyclique pour chaque point ---
+     *  On modélise la charge comme une résistance : R_eq = V / I
+     *  Puis on en déduit l'alpha par le rapport de diviseur :
+     *    alpha = (1 - R_eq / R_mesure) * 100 % */
+    for (int i = 0; i < NB_POINT; i++)
     {
-        /* Bloquant : attend qu'un message soit disponible dans la file */
-        xQueueReceive(balTxCanMsg, &txMsg, portMAX_DELAY);
-        CAN.beginPacket(txMsg.id);
-        CAN.write(txMsg.data, txMsg.len);
-        CAN.endPacket();
+        if (courbeVI[i].courant == 0.0f)
+        {
+            courbeVI[i].alpha = 0.0f;
+            continue;
+        }
+        float rEq = courbeVI[i].tension / courbeVI[i].courant;
+        courbeVI[i].alpha = (1.0f - (rEq / R_mesure)) * 100.0f;
+        /* on verifie si la valeur de alpha est bien entre 0 et 100*/
+        if (courbeVI[i].alpha < 0.0f)   courbeVI[i].alpha = 0.0f;
+        if (courbeVI[i].alpha > 100.0f) courbeVI[i].alpha = 100.0f;
     }
+
+    /* --- Étape 4 : mesure réelle de chaque point --- */
+    for (int i = 0; i < NB_POINT; i++)
+    {
+        MesureVI(&courbeVI[i]);
+    }
+
+    /* Affichage des résultats en format CSV pour tracé sur PC */
+    Serial.printf("tension,courant,alpha\n");
+    for (int i = 0; i < NB_POINT; i++)
+    {
+        Serial.printf("%.2f,%.2f,%2.2f\n", courbeVI[i].tension, courbeVI[i].courant, courbeVI[i].alpha);
+    }
+
+    /* --- Étape 5 : envoi des points sur le bus CAN ---
+     *  Protocole : trame DEBUT_TRANSMISSION, puis N trames de données, puis FIN_TRANSMISSION.
+     *  Chaque flottant est encodé sur 2 octets : valeur * 100 → octet fort | octet faible */
+
+    txMsg.id  = CAN_ID_DEBUT_TRANSMISSION;
+    EnvoiMessageCan(txMsg);
+    txMsg.id = CAN_ID_RENVOI_MESURE_VI;
+    for (int i = 0; i < NB_POINT; i++)
+    {
+        txMsg.len    = 5;
+        int tensionEncode  = (int)(courbeVI[i].tension * 100.0);
+        int courantEncode  = (int)(courbeVI[i].courant * 100.0);
+        txMsg.data[0] = (unsigned char)((tensionEncode >> 8) % 256); // octet fort tension
+        txMsg.data[1] = (unsigned char)( tensionEncode       % 256); // octet faible tension
+        txMsg.data[2] = (unsigned char)((courantEncode >> 8) % 256); // octet fort courant
+        txMsg.data[3] = (unsigned char)( courantEncode       % 256); // octet faible courant
+        EnvoiMessageCan(txMsg);
+        }
+
+    txMsg.id  = CAN_ID_FIN_TRANSMISSION;
+    txMsg.len = 0;
+    EnvoiMessageCan(txMsg);
+
 }
 
 /**
  * @brief Tâche FreeRTOS – mesure de la température panneau via TC74 (priorité 5).
  *
- * Attend `FLAG_CAN_TEMPERATURE` ou `FLAG_SERIE_TEMPERATURE`, lit le TC74 (I2C, 0x48)
  * et envoie `CAN_ID_RENVOI_TEMP_PANNEAU` (ID=18) :
  * - `data[0]` = signe (1 si T > 0, 0 sinon)
  * - `data[1]` = valeur absolue en °C (entier)
  * - `data[2]` = numéro de carte
  * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
  */
-void TaskMesureTemperatureTc74(void *pvParameters)
+void MesureTemperatureTc74(void )
 {
     CanMessage_t txMsg;
+    CanMessage_t marqueurMsg;
+    marqueurMsg.len = 0;
     txMsg.len     = 3;
     txMsg.id      = CAN_ID_RENVOI_TEMP_PANNEAU;
-    txMsg.data[2] = (char)(intptr_t)pvParameters; // numéro de carte
 
-    TC74 tc74(0x48); // adresse I2C du capteur TC74
-    tc74.begin();
 
-    /* Attente que le capteur soit prêt (sortie du mode veille) */
-    while (tc74.isStandby())
-    {
-        xSemaphoreTake(mutexSerialLink, portMAX_DELAY);
-        Serial.println("TC74 en veille, attente...");
-        xSemaphoreGive(mutexSerialLink);
-        vTaskDelay(pdMS_TO_TICKS(3000));
+    float temperature = tc74.readTemperature('C');
+
+    /* Encodage du signe et de la valeur (valeur absolue ; le signe est dans data[0]) */
+    if(temperature>0){
+        txMsg.data[0] = 1;
+        txMsg.data[1] = (char) temperature;
+    }else{
+        txMsg.data[0] = 0;
+        txMsg.data[1] = (char) -temperature;
     }
+    txMsg.data[2] = numCarte;
+    /* Dépôt dans la file CAN, encadré par DEBUT/FIN_TRANSMISSION */
+    marqueurMsg.id = CAN_ID_DEBUT_TRANSMISSION;
+    EnvoiMessageCan(marqueurMsg);
 
-    while (1)
-    {
-        /* Mise en sommeil jusqu'à un ordre de mesure de température */
-        xEventGroupWaitBits(flagsSystemeEvent, FLAG_CAN_TEMPERATURE | FLAG_SERIE_TEMPERATURE, pdTRUE, pdFALSE, portMAX_DELAY);
+    EnvoiMessageCan(txMsg);
 
-        float temperature = tc74.readTemperature('C');
+    marqueurMsg.id = CAN_ID_FIN_TRANSMISSION;
+    EnvoiMessageCan(marqueurMsg);
 
-        /* Encodage du signe et de la valeur (valeur absolue ; le signe est dans data[0]) */
-        if(temperature>0){
-            txMsg.data[0] = 1;
-            txMsg.data[1] = (char) temperature;
-        }else{
-            txMsg.data[0] = 0;
-            txMsg.data[1] = (char) -temperature;
-        }
-
-        /* Dépôt dans la file CAN */
-        xSemaphoreTake(mutexCanLink, portMAX_DELAY);
-        xQueueSend(balTxCanMsg, &txMsg, portMAX_DELAY);
-        xSemaphoreGive(mutexCanLink);
-
-        xSemaphoreTake(mutexSerialLink, portMAX_DELAY);
-        Serial.printf("Temperature panneau : %2.2f °C\n", temperature);
-        xSemaphoreGive(mutexSerialLink);
-    }
+    Serial.printf("Temperature panneau : %2.2f °C\n", temperature);
 }
 
-/**
- * @brief Tâche FreeRTOS – réponse aux demandes d'identification (priorité 5).
- *
- * Attend `FLAG_CAN_NUM_CARTE` puis envoie `CAN_ID_RENVOI_NUM_CARTE` (ID=10)
- * avec `data[0]` = numéro de cette carte.
- * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
- */
-void TaskEnvoiNumCarte(void *pvParameters)
-{
+void EnvoiNumCarte(void){
     CanMessage_t txMsg;
-    txMsg.len     = 1;
-    txMsg.id      = CAN_ID_RENVOI_NUM_CARTE;
-    txMsg.data[0] = (char)(intptr_t)pvParameters; // numéro de carte
-
-    while (1)
-    {
-        xEventGroupWaitBits(flagsSystemeEvent, FLAG_CAN_NUM_CARTE, pdTRUE, pdTRUE, portMAX_DELAY);
-        xSemaphoreTake(mutexCanLink, portMAX_DELAY);
-        xQueueSend(balTxCanMsg, &txMsg, portMAX_DELAY);
-        xSemaphoreGive(mutexCanLink);
-    }
+    txMsg.len = 1;
+    txMsg.id = CAN_ID_RENVOI_NUM_CARTE;
+    txMsg.data[0] = numCarte;
+    EnvoiMessageCan(txMsg);
 }
-
-/**
- * @brief Tâche FreeRTOS – mesure d'un point I-V à alpha fixé (priorité 5).
- *
- * Attend un `PointDeMesure_t` dans `balRapportCyclique` (déposé par la
- * commande série `"M <alpha>"`), appelle `MesureVI()` et affiche le résultat.
- * @param pvParameters Non utilisé.
- */
-void TaskMesurePointVI(void *pvParameters)
-{
-    PointDeMesure_t point;
-    while (1)
-    {
-        /* Bloquant : attend un point à mesurer dans la file */
-        xQueueReceive(balRapportCyclique, &point, portMAX_DELAY);
-        MesureVI(&point);
-        xSemaphoreTake(mutexSerialLink, portMAX_DELAY);
-        Serial.printf("Mesure VI : Alpha = %2.2f %%, Tension = %2.2f V, Courant = %2.2f A\n",
-                      point.alpha, point.tension, point.courant);
-        xSemaphoreGive(mutexSerialLink);
-    }
-}
-

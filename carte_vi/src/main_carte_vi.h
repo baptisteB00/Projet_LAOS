@@ -6,7 +6,7 @@
 
 #include <Arduino.h>
 #include <CAN.h>
-#include "TC74.h"
+#include <tc74.h>
 #include "math.h"
 #include <can_id.h>
 
