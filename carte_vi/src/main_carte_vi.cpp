@@ -5,7 +5,6 @@
  * Mesure la courbe I-V en faisant varier le rapport cyclique PWM (0–100 %)
  * sur une résistance de charge, puis en lisant tension et courant via ADC.
  * Le numéro de carte (1 à 5) est lu au démarrage sur un DIP switch 4 bits.
- *
  */
 
 #include "main_carte_vi.h"
@@ -16,17 +15,14 @@ float constanteTension[5] = { 1.13,     1.210,    1.14,     1.6,      1.31   };
 float facteurCourant[5]   = { 0.00188, -0.0154,  -0.0066,  -0.0138,  -0.00653};
 float constanteCourant[5] = { 1.01,     1.11,     1.04,     1.07,     1.05   };
 
-/* ---- Numéro de cette carte (lu sur le DIP switch au démarrage) ----- */
-unsigned char numCarte = 0;
-/* ---- Déclaration du capteur tc74 en global pour etre accesible dans le setup et dans a fonction de mesure ---- */
-TC74 tc74(0x48);
-CanMessage_t rxMsg;
-bool canAvailable = false;
-void MesureCourbeVI(void);
-void MesureTemperatureTc74(void);
-void EnvoiNumCarte(void);
+/* ---- Variables globales -------------------------------------------- */
+unsigned char numCarte   = 0;        // numéro de carte lu sur le DIP switch
+TC74          tc74(0x48);            // capteur de température I2C
+CanMessage_t  rxMsg;                 // dernier message CAN reçu (rempli par l'ISR)
+bool          canAvailable = false;  // vrai quand un nouveau message CAN est prêt
+
 /* ==================================================================== */
-/*  SETUP – initialisation matérielle et création des tâches FreeRTOS   */
+/*  SETUP – initialisation matérielle                                    */
 /* ==================================================================== */
 void setup()
 {
@@ -67,19 +63,22 @@ void setup()
         while (1);
     }
 
-    /* Enregistrement des callbacks d'interruption */
+    /* Enregistrement des callbacks */
     Serial.onReceive(OnReceiveSerial);
     CAN.onReceive(OnReceiveCan);
 
     tc74.begin();
 }
 
-/* FreeRTOS gère la boucle principale ; loop() ne sert plus à rien */
+/* ==================================================================== */
+/*  LOOP – traitement des messages reçus                                 */
+/* ==================================================================== */
 void loop()
 {
-    if(canAvailable == true){
+    if (canAvailable == true)
+    {
         canAvailable = false;
-        CanMessage_t localRxMsg = rxMsg;
+        CanMessage_t localRxMsg = rxMsg; // copie locale pour éviter une modification par l'ISR
 
         if ((localRxMsg.id == CAN_ID_DEMANDE_MESURE_VI) && (localRxMsg.data[0] == numCarte))
         {
@@ -96,38 +95,24 @@ void loop()
     }
 }
 
-/**
- * @brief Callback CAN – appelée en ISR à chaque trame reçue.
- *
- * Lit l'ID et les données, puis lève le bit d'événement correspondant
- * dans `flagsSystemeEvent` **uniquement si le message est destiné à cette carte**
- * (vérification `data[0] == numCarte` pour ID=11 et ID=12).
- * @param packetSize Taille de la trame (fournie par la bibliothèque CAN).
- */
+/* ==================================================================== */
+/*  CALLBACKS                                                            */
+/* ==================================================================== */
+
 void OnReceiveCan(int packetSize)
 {
-    rxMsg.id = CAN.packetId();
+    rxMsg.id  = CAN.packetId();
     rxMsg.len = CAN.packetDlc();
-    for (int i = 0 ; CAN.available() ; i++){
+    for (int i = 0; CAN.available(); i++)
+    {
         rxMsg.data[i] = CAN.read();
     }
     canAvailable = true;
 }
 
-void EnvoiMessageCan(CanMessage_t message){
-    CAN.beginPacket(message.id);
-    CAN.write(message.data,message.len);
-    CAN.endPacket();
-}
-/**
- * @brief Callback UART – appelée en ISR à chaque réception série.
- *
- * Lève `BIT_SERIAL_MSG` dans `flagsMessageSerial` pour réveiller
- * `TaskTraitementMessageSerie`.
- */
-void OnReceiveSerial(void )
+void OnReceiveSerial()
 {
-    String chaine   = "";  // accumule les caractères jusqu'au retour chariot
+    String chaine  = "";
     String commande;
     String valeur;
 
@@ -135,11 +120,10 @@ void OnReceiveSerial(void )
     {
         char ch = Serial.read();
 
-        if (ch == '\r' || ch == '\n') // fin de commande
+        if (ch == '\r' || ch == '\n')
         {
             if (chaine.length() > 0)
             {
-                /* Découpage "COMMANDE VALEUR" */
                 int index = chaine.indexOf(' ');
                 if (index == -1)
                 {
@@ -152,7 +136,6 @@ void OnReceiveSerial(void )
                     valeur   = chaine.substring(index + 1);
                 }
 
-                /* Exécution de la commande */
                 if (commande == "M")
                 {
                     PointDeMesure_t point;
@@ -164,26 +147,20 @@ void OnReceiveSerial(void )
                 else if (commande == "T")
                     MesureTemperatureTc74();
 
-                chaine = ""; // réinitialisation du buffer
+                chaine = "";
             }
         }
         else
         {
-            chaine += ch; // accumulation des caractères
+            chaine += ch;
         }
     }
 }
 
-/**
- * @brief Mesure un point de la courbe I-V.
- *
- * Séquence : ferme le relais → applique le PWM → attend 100 ms →
- * moyenne `MOYENNE` (100) lectures ADC → ouvre le relais → corrige
- * la non-linéarité avec les coefficients propres à `numCarte`.
- *
- * @param point En entrée : `alpha` (rapport cyclique 0–100 %).
- *              En sortie : `tension` (V) et `courant` (A) mesurés.
- */
+/* ==================================================================== */
+/*  FONCTIONS DE MESURE                                                  */
+/* ==================================================================== */
+
 void MesureVI(PointDeMesure_t *point)
 {
     /* Étape 1 : fermeture du relais */
@@ -208,7 +185,7 @@ void MesureVI(PointDeMesure_t *point)
     /* Calcul de la valeur moyenne et mise à l'échelle physique
      *   Courant : diviseur de tension ×4, pleine échelle 1319 mV → Ampères
      *   Tension : diviseur de tension ×22, pleine échelle 1954 mV → Volts  */
-    float courantBrut = (sommeCourant / MOYENNE) * 4  / 1319.0f;
+    float courantBrut  = (sommeCourant / MOYENNE) * 4  / 1319.0f;
     float tensionBrute = (sommeTension / MOYENNE) * 22 / 1954.0f;
 
     /* Étape 5 : ouverture du relais */
@@ -220,43 +197,28 @@ void MesureVI(PointDeMesure_t *point)
     tensionBrute = tensionBrute * (tensionBrute * facteurTension[numCarte - 1] + constanteTension[numCarte - 1]);
     courantBrut  = courantBrut  * (courantBrut  * facteurCourant[numCarte - 1] + constanteCourant[numCarte - 1]);
 
-    /* Écriture du résultat dans la structure pointée */
     point->courant = courantBrut;
     point->tension = tensionBrute;
 }
 
-/**
- * @brief Tâche FreeRTOS – mesure de la courbe I-V complète (priorité 5).
- *
- * Attend `FLAG_CAN_VI_ALL` ou `FLAG_SERIE_VI_ALL`, puis :
- * 1. Mesure Icc (alpha=100 %) et V0 (alpha=0 %)
- * 2. Répartit `NB_POINT` (23) points en échelle logarithmique
- * 3. Calcule le alpha nécessaire pour chaque point : `R_eq = V/I → alpha`
- * 4. Mesure chaque point réel via `MesureVI()`
- * 5. Envoie la séquence CAN : DEBUT + 23×`CAN_ID_RENVOI_MESURE_VI` + FIN
- * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
- */
-void MesureCourbeVI(void )
+void MesureCourbeVI(void)
 {
-    PointDeMesure_t courbeVI[NB_POINT]; // tableau de tous les points de la courbe
-    PointDeMesure_t icc, v0;            // points aux extrêmes : court-circuit et circuit ouvert
+    PointDeMesure_t courbeVI[NB_POINT];
+    PointDeMesure_t icc, v0;
     CanMessage_t txMsg;
-    txMsg.data[4] = numCarte ;
+    txMsg.data[4] = numCarte;
 
     /* --- Étape 1 : mesure des points extrêmes --- */
-    icc.alpha = 100;  // court-circuit : relais fermé, PWM à 100 % → courant maximal
+    icc.alpha = 100;  // court-circuit : courant maximal
     MesureVI(&icc);
 
-    v0.alpha = 0;     // circuit ouvert : PWM à 0 % → tension maximale
+    v0.alpha = 0;     // circuit ouvert : tension maximale
     MesureVI(&v0);
 
     Serial.printf("Icc = %2.2f A, Imin = %2.2f A, V0 = %2.2f V, Vmin = %2.2f V\n",
                   icc.courant, v0.courant, v0.tension, icc.tension);
 
     /* --- Étape 2 : répartition logarithmique des points ---
-     *  On utilise log10 pour densifier les points près des extrémités
-     *  où la courbe VI varie le plus rapidement.
-     *
      *  Première moitié (i < NB_POINT_V0_CONST) : tension fixée à V0, courant varie
      *  Deuxième moitié (i >= NB_POINT_V0_CONST) : courant fixé à Icc, tension varie */
     for (int i = 0; i < NB_POINT; i++)
@@ -277,9 +239,7 @@ void MesureCourbeVI(void )
     }
 
     /* --- Étape 3 : calcul du rapport cyclique pour chaque point ---
-     *  On modélise la charge comme une résistance : R_eq = V / I
-     *  Puis on en déduit l'alpha par le rapport de diviseur :
-     *    alpha = (1 - R_eq / R_mesure) * 100 % */
+     *  R_eq = V / I  →  alpha = (1 - R_eq / R_mesure) * 100 % */
     for (int i = 0; i < NB_POINT; i++)
     {
         if (courbeVI[i].courant == 0.0f)
@@ -289,7 +249,6 @@ void MesureCourbeVI(void )
         }
         float rEq = courbeVI[i].tension / courbeVI[i].courant;
         courbeVI[i].alpha = (1.0f - (rEq / R_mesure)) * 100.0f;
-        /* on verifie si la valeur de alpha est bien entre 0 et 100*/
         if (courbeVI[i].alpha < 0.0f)   courbeVI[i].alpha = 0.0f;
         if (courbeVI[i].alpha > 100.0f) courbeVI[i].alpha = 100.0f;
     }
@@ -300,83 +259,86 @@ void MesureCourbeVI(void )
         MesureVI(&courbeVI[i]);
     }
 
-    /* Affichage des résultats en format CSV pour tracé sur PC */
+    /* Affichage CSV pour tracé sur PC */
     Serial.printf("tension,courant,alpha\n");
     for (int i = 0; i < NB_POINT; i++)
     {
         Serial.printf("%.2f,%.2f,%2.2f\n", courbeVI[i].tension, courbeVI[i].courant, courbeVI[i].alpha);
     }
 
-    /* --- Étape 5 : envoi des points sur le bus CAN ---
-     *  Protocole : trame DEBUT_TRANSMISSION, puis N trames de données, puis FIN_TRANSMISSION.
+    /* --- Étape 5 : envoi sur le bus CAN ---
+     *  Protocole : DEBUT_TRANSMISSION + N trames + FIN_TRANSMISSION
      *  Chaque flottant est encodé sur 2 octets : valeur * 100 → octet fort | octet faible */
-
     txMsg.id  = CAN_ID_DEBUT_TRANSMISSION;
+    txMsg.len = 0;
     EnvoiMessageCan(txMsg);
+
     txMsg.id = CAN_ID_RENVOI_MESURE_VI;
     for (int i = 0; i < NB_POINT; i++)
     {
-        txMsg.len    = 5;
-        int tensionEncode  = (int)(courbeVI[i].tension * 100.0);
-        int courantEncode  = (int)(courbeVI[i].courant * 100.0);
+        txMsg.len = 5;
+        int tensionEncode = (int)(courbeVI[i].tension * 100.0);
+        int courantEncode = (int)(courbeVI[i].courant * 100.0);
         txMsg.data[0] = (unsigned char)((tensionEncode >> 8) % 256); // octet fort tension
         txMsg.data[1] = (unsigned char)( tensionEncode       % 256); // octet faible tension
         txMsg.data[2] = (unsigned char)((courantEncode >> 8) % 256); // octet fort courant
         txMsg.data[3] = (unsigned char)( courantEncode       % 256); // octet faible courant
         EnvoiMessageCan(txMsg);
-        }
+    }
 
     txMsg.id  = CAN_ID_FIN_TRANSMISSION;
     txMsg.len = 0;
     EnvoiMessageCan(txMsg);
-
 }
 
-/**
- * @brief Tâche FreeRTOS – mesure de la température panneau via TC74 (priorité 5).
- *
- * et envoie `CAN_ID_RENVOI_TEMP_PANNEAU` (ID=18) :
- * - `data[0]` = signe (1 si T > 0, 0 sinon)
- * - `data[1]` = valeur absolue en °C (entier)
- * - `data[2]` = numéro de carte
- * @param pvParameters Numéro de carte (cast `(char)(intptr_t)`).
- */
-void MesureTemperatureTc74(void )
+void MesureTemperatureTc74(void)
 {
     CanMessage_t txMsg;
     CanMessage_t marqueurMsg;
     marqueurMsg.len = 0;
-    txMsg.len     = 3;
-    txMsg.id      = CAN_ID_RENVOI_TEMP_PANNEAU;
-
+    txMsg.len = 3;
+    txMsg.id  = CAN_ID_RENVOI_TEMP_PANNEAU;
 
     float temperature = tc74.readTemperature('C');
 
-    /* Encodage du signe et de la valeur (valeur absolue ; le signe est dans data[0]) */
-    if(temperature>0){
+    /* Encodage : data[0] = signe (1 si T>0), data[1] = valeur absolue, data[2] = numéro de carte */
+    if (temperature > 0)
+    {
         txMsg.data[0] = 1;
         txMsg.data[1] = (char) temperature;
-    }else{
+    }
+    else
+    {
         txMsg.data[0] = 0;
         txMsg.data[1] = (char) -temperature;
     }
     txMsg.data[2] = numCarte;
-    /* Dépôt dans la file CAN, encadré par DEBUT/FIN_TRANSMISSION */
+
     marqueurMsg.id = CAN_ID_DEBUT_TRANSMISSION;
     EnvoiMessageCan(marqueurMsg);
-
     EnvoiMessageCan(txMsg);
-
     marqueurMsg.id = CAN_ID_FIN_TRANSMISSION;
     EnvoiMessageCan(marqueurMsg);
 
-    Serial.printf("Temperature panneau : %2.2f °C\n", temperature);
+    Serial.printf("Temperature panneau : %2.2f deg C\n", temperature);
 }
 
-void EnvoiNumCarte(void){
+/* ==================================================================== */
+/*  FONCTIONS D'ENVOI CAN                                                */
+/* ==================================================================== */
+
+void EnvoiMessageCan(CanMessage_t message)
+{
+    CAN.beginPacket(message.id);
+    CAN.write(message.data, message.len);
+    CAN.endPacket();
+}
+
+void EnvoiNumCarte(void)
+{
     CanMessage_t txMsg;
-    txMsg.len = 1;
-    txMsg.id = CAN_ID_RENVOI_NUM_CARTE;
+    txMsg.id      = CAN_ID_RENVOI_NUM_CARTE;
+    txMsg.len     = 1;
     txMsg.data[0] = numCarte;
     EnvoiMessageCan(txMsg);
 }
