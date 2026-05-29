@@ -5,6 +5,12 @@
  * Mesure la courbe I-V en faisant varier le rapport cyclique PWM (0–100 %)
  * sur une résistance de charge, puis en lisant tension et courant via ADC.
  * Le numéro de carte (1 à 5) est lu au démarrage sur un DIP switch 4 bits.
+ *
+ * Fonctionnement séquentiel :
+ *  - setup() : initialise le matériel et enregistre les callbacks
+ *  - OnReceiveCan() : stocke le message reçu et lève un flag (ISR)
+ *  - OnReceiveSerial() : lit et exécute les commandes série
+ *  - loop() : vérifie le flag et appelle la fonction de traitement appropriée
  */
 
 #include "main_carte_vi.h"
@@ -16,14 +22,31 @@ float facteurCourant[5]   = { 0.00188, -0.0154,  -0.0066,  -0.0138,  -0.00653};
 float constanteCourant[5] = { 1.01,     1.11,     1.04,     1.07,     1.05   };
 
 /* ---- Variables globales -------------------------------------------- */
-unsigned char numCarte   = 0;        // numéro de carte lu sur le DIP switch
-TC74          tc74(0x48);            // capteur de température I2C
-CanMessage_t  rxMsg;                 // dernier message CAN reçu (rempli par l'ISR)
-bool          canAvailable = false;  // vrai quand un nouveau message CAN est prêt
+unsigned char numCarte    = 0;      // numéro de carte lu sur le DIP switch (1 à 5)
+TC74          tc74(0x48);           // capteur de température I2C (adresse 0x48)
+CanMessage_t  rxMsg;                // dernier message CAN reçu (rempli par l'ISR)
+bool          canAvailable = false; // vrai quand un nouveau message CAN est prêt
+
+/* ---- Déclarations anticipées --------------------------------------- */
+void MesureCourbeVI(void);
+void MesureTemperatureTc74(void);
+void EnvoiNumCarte(void);
 
 /* ==================================================================== */
 /*  SETUP – initialisation matérielle                                    */
 /* ==================================================================== */
+
+/**
+ * @brief Initialise le matériel et enregistre les callbacks.
+ *
+ * Séquence :
+ *  1. Démarrage liaison série (115200 bauds)
+ *  2. Démarrage bus CAN à 10 kbps
+ *  3. Configuration relais, PWM et DIP switch
+ *  4. Lecture du numéro de carte (DIP switch 4 bits)
+ *  5. Enregistrement des callbacks CAN et série
+ *  6. Initialisation du capteur TC74
+ */
 void setup()
 {
     Serial.begin(115200);
@@ -63,7 +86,6 @@ void setup()
         while (1);
     }
 
-    /* Enregistrement des callbacks */
     Serial.onReceive(OnReceiveSerial);
     CAN.onReceive(OnReceiveCan);
 
@@ -73,6 +95,14 @@ void setup()
 /* ==================================================================== */
 /*  LOOP – traitement des messages reçus                                 */
 /* ==================================================================== */
+
+/**
+ * @brief Boucle principale – traite les messages CAN reçus.
+ *
+ * Vérifie le flag `canAvailable` levé par l'ISR. Si un message est prêt,
+ * copie `rxMsg` dans une variable locale, remet le flag à false, puis
+ * appelle la fonction de traitement correspondant à l'identifiant CAN.
+ */
 void loop()
 {
     if (canAvailable == true)
@@ -99,6 +129,15 @@ void loop()
 /*  CALLBACKS                                                            */
 /* ==================================================================== */
 
+/**
+ * @brief Callback CAN – appelée à chaque trame reçue (interruption).
+ *
+ * Lit l'identifiant, la longueur et les données de la trame reçue,
+ * les stocke dans `rxMsg`, puis lève le flag `canAvailable` pour
+ * signaler à `loop()` qu'un message est prêt à être traité.
+ *
+ * @param packetSize Taille de la trame reçue (fournie par la bibliothèque CAN).
+ */
 void OnReceiveCan(int packetSize)
 {
     rxMsg.id  = CAN.packetId();
@@ -110,7 +149,16 @@ void OnReceiveCan(int packetSize)
     canAvailable = true;
 }
 
-void OnReceiveSerial()
+/**
+ * @brief Callback série – appelée à chaque réception UART.
+ *
+ * Lit les caractères un par un et accumule jusqu'au retour chariot.
+ * Commandes reconnues :
+ *  - `"M <alpha>"` : mesure un point VI au rapport cyclique `alpha` (0–100 %)
+ *  - `"A"`         : mesure la courbe VI complète
+ *  - `"T"`         : mesure la température du panneau via TC74
+ */
+void OnReceiveSerial(void)
 {
     String chaine  = "";
     String commande;
@@ -161,6 +209,20 @@ void OnReceiveSerial()
 /*  FONCTIONS DE MESURE                                                  */
 /* ==================================================================== */
 
+/**
+ * @brief Mesure un point de la courbe I-V.
+ *
+ * Séquence :
+ *  1. Fermeture du relais
+ *  2. Application du rapport cyclique PWM (alpha → valeur 0–511)
+ *  3. Attente de stabilisation (100 ms)
+ *  4. Moyenne de `MOYENNE` lectures ADC pour tension et courant
+ *  5. Ouverture du relais
+ *  6. Correction de la non-linéarité avec les coefficients de la carte
+ *
+ * @param point En entrée : `alpha` (rapport cyclique 0–100 %).
+ *              En sortie : `tension` (V) et `courant` (A) mesurés et corrigés.
+ */
 void MesureVI(PointDeMesure_t *point)
 {
     /* Étape 1 : fermeture du relais */
@@ -201,6 +263,19 @@ void MesureVI(PointDeMesure_t *point)
     point->tension = tensionBrute;
 }
 
+/**
+ * @brief Mesure la courbe I-V complète et l'envoie sur le bus CAN.
+ *
+ * Séquence :
+ *  1. Mesure des points extrêmes : Icc (alpha=100%) et V0 (alpha=0%)
+ *  2. Répartition logarithmique de NB_POINT points entre ces extrêmes
+ *  3. Calcul du rapport cyclique nécessaire pour chaque point (R_eq = V/I)
+ *  4. Mesure réelle de chaque point via MesureVI()
+ *  5. Envoi CAN : DEBUT_TRANSMISSION + NB_POINT trames + FIN_TRANSMISSION
+ *
+ * Chaque trame de données contient : tension (2 octets) + courant (2 octets)
+ * + numéro de carte (1 octet), encodés en valeur × 100.
+ */
 void MesureCourbeVI(void)
 {
     PointDeMesure_t courbeVI[NB_POINT];
@@ -291,6 +366,15 @@ void MesureCourbeVI(void)
     EnvoiMessageCan(txMsg);
 }
 
+/**
+ * @brief Mesure la température du panneau via le capteur TC74 et l'envoie sur le bus CAN.
+ *
+ * Lit la température en degrés Celsius via I2C (adresse 0x48).
+ * Protocole CAN (ID = CAN_ID_RENVOI_TEMP_PANNEAU, 3 octets) :
+ *  - data[0] : signe (1 si T > 0, 0 si T <= 0)
+ *  - data[1] : valeur absolue en °C (entier)
+ *  - data[2] : numéro de cette carte
+ */
 void MesureTemperatureTc74(void)
 {
     CanMessage_t txMsg;
@@ -301,7 +385,7 @@ void MesureTemperatureTc74(void)
 
     float temperature = tc74.readTemperature('C');
 
-    /* Encodage : data[0] = signe (1 si T>0), data[1] = valeur absolue, data[2] = numéro de carte */
+    /* Encodage du signe et de la valeur absolue */
     if (temperature > 0)
     {
         txMsg.data[0] = 1;
@@ -327,6 +411,11 @@ void MesureTemperatureTc74(void)
 /*  FONCTIONS D'ENVOI CAN                                                */
 /* ==================================================================== */
 
+/**
+ * @brief Envoie un message sur le bus CAN.
+ *
+ * @param message Message à envoyer (id, len, data[]).
+ */
 void EnvoiMessageCan(CanMessage_t message)
 {
     CAN.beginPacket(message.id);
@@ -334,6 +423,12 @@ void EnvoiMessageCan(CanMessage_t message)
     CAN.endPacket();
 }
 
+/**
+ * @brief Envoie le numéro de cette carte sur le bus CAN.
+ *
+ * Répond à une demande d'identification (CAN_ID_DEMANDE_NUM_CARTE).
+ * Envoie CAN_ID_RENVOI_NUM_CARTE avec data[0] = numCarte.
+ */
 void EnvoiNumCarte(void)
 {
     CanMessage_t txMsg;
