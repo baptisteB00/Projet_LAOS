@@ -17,7 +17,6 @@ Contrôle le relais principal qui connecte ou déconnecte le panneau solaire du 
 
 - **Numéro de carte :** 12 (fixe dans le firmware)
 - **Vitesse CAN :** 10 kbps
-- **FreeRTOS :** Non utilisé (architecture simple boucle `loop()`)
 
 ---
 
@@ -37,7 +36,7 @@ flowchart TD
 
     RELAIS["ControleRelais(onOff)<br/>Commande GPIO Relais<br/>et LEDs état"]
 
-    LOOP -->|CAN_ID_DEMANDE_NUM_CARTE| DELAY["delay 120 ms<br/>Réponse CAN ID=10"]
+    LOOP -->|CAN_ID_DEMANDE_NUM_CARTE| DELAY["delay 120 ms<br/>Réponse 0x021"]
     LOOP -->|CAN_ID_DEMANDE_ALIMENTATION| RELAIS
     SERIAL --> RECEPTION --> RELAIS
 ```
@@ -48,8 +47,8 @@ flowchart TD
 
 | ID reçu | Nom | Action |
 |:-------:|-----|--------|
-| 0 | `CAN_ID_DEMANDE_NUM_CARTE` | Attend 120 ms, répond ID=10 avec `data[0]=12` |
-| 1 | `CAN_ID_DEMANDE_ALIMENTATION` | Appelle `ControleRelais(data[0])` |
+| `0x020` | `CAN_ID_DEMANDE_NUM_CARTE` | Attend 120 ms, répond `0x021` avec `data[0]=12` |
+| `0x100` | `CAN_ID_DEMANDE_ALIMENTATION` | Appelle `ControleRelais(data[0])` |
 
 ---
 

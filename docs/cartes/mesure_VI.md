@@ -83,7 +83,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START["Déclenchement CAN ID=11 ou cmd A"] --> ICC["Mesure Icc<br/>alpha=100%"]
+    START["Déclenchement CAN 0x300 ou cmd A"] --> ICC["Mesure Icc<br/>alpha=100%"]
     ICC --> V0["Mesure V0<br/>alpha=0%"]
     V0 --> REP["Répartition logarithmique<br/>des 23 points cibles"]
     REP --> ALPHA["Calcul alpha pour chaque point<br/>R_eq = V/I"]

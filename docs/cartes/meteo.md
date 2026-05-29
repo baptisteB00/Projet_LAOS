@@ -60,7 +60,7 @@ data[1] = humidityInt % 256;   // octet faible
 
 ---
 
-## Format du message groupé (ID=45)
+## Format du message groupé (`0x280`)
 
 | Octets | Contenu | Encodage |
 |:------:|---------|----------|

@@ -5,7 +5,9 @@
 Mesure les **tensions et le courant de chaque string** (branche) du champ solaire. Un multiplexeur 8:1 permet de lire jusqu'à 5 tensions et 1 courant via un seul canal ADC ESP32 par sortie multiplexeur.
 
 - **Numéro de carte :** 13 (fixe dans le firmware)
-- **FreeRTOS :** File d'attente `xBalTxCanMsg` créée, mais la tâche d'envoi n'est pas encore attachée au scheduler (en cours de développement)
+- **Vitesse CAN :** 10 kbps
+
+> **Note :** cette carte utilise encore une architecture FreeRTOS (une queue + une tâche d'envoi CAN). Elle sera convertie en séquentiel (patron ISR + flag) ultérieurement, comme les autres cartes.
 
 ---
 
@@ -42,8 +44,8 @@ Mesure les **tensions et le courant de chaque string** (branche) du champ solair
 
 | ID reçu | Nom | Action |
 |---------|-----|--------|
-| 0 | `CAN_ID_DEMANDE_NUM_CARTE` | Envoie ID=10, `data[0]=13` |
-| 50 | `CAN_ID_DEMANDE_TENSION_STRING` | Appelle `mesure_string(data[0])` |
+| `0x020` | `CAN_ID_DEMANDE_NUM_CARTE` | Envoie `0x021` avec `data[0]=13` |
+| `0x400` | `CAN_ID_DEMANDE_TENSION_STRING` | Appelle `mesure_string(data[0])` |
 
 ---
 
@@ -57,12 +59,12 @@ flowchart TD
     LEC --> FACT["× facteur\n(0.081 pour tensions\n0.003462 pour courant)"]
     FACT --> LOOP
     LOOP --> SER["Affichage série CSV"]
-    SER --> CAN["Envoi CAN ID=51\n6 trames (i, valeur)"]
+    SER --> CAN["Envoi CAN 0x480\n6 trames (i, valeur)"]
 ```
 
 ---
 
-## Format du message CAN de réponse (ID=51)
+## Format du message CAN de réponse (`0x480`)
 
 ```
 Octet   : [0]      [1]        [2]

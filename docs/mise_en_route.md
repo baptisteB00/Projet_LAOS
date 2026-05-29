@@ -106,7 +106,7 @@ Chaque carte VI a un DIP switch 4 bits qui définit son numéro (1 à 5) :
 | Carte | Message attendu |
 |-------|----------------|
 | Alimentation | `Carte Alimentation` |
-| Météo | `AM2315 pret.` |
+| Météo | *(aucun message si OK ; `Erreur : demarrage AM2315 impossible !` si le capteur n'est pas détecté)* |
 | VI (n°X) | `Numero de carte : X` |
 | Mesure Tension | `Carte mesure de tension` |
 | Supervision | `CAN Receiver` |

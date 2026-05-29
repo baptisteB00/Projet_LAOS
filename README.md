@@ -1,6 +1,6 @@
 # Projet LAOS – Système de surveillance de panneaux solaires
 
-Système embarqué multi-cartes ESP32 pour la surveillance et la caractérisation de panneaux solaires photovoltaïques. Les cartes communiquent via un bus **CAN à 10 kbps** et s'appuient sur **FreeRTOS** pour les tâches parallèles.
+Système embarqué multi-cartes ESP32 pour la surveillance et la caractérisation de panneaux solaires photovoltaïques. Les cartes communiquent via un bus **CAN à 10 kbps**. Chaque carte utilise une architecture **séquentielle** simple (`setup()` + `loop()` + ISR + flag), accessible à des étudiants de BUT GEII.
 
 ---
 
@@ -35,43 +35,57 @@ graph TD
 
 ## Cartes du système
 
-| Carte | Dossier | N° carte | Rôle principal | FreeRTOS |
-|-------|---------|:--------:|----------------|:--------:|
-| Alimentation | `carte_alimentation/` | 12 | Contrôle relais + LEDs état | Non |
-| Météo | `carte_meteo/` | 10 | Température, humidité, irradiance | Oui – 6 tâches |
-| Mesure I-V | `carte_vi/` | 1 à 5 | Courbe courant-tension du panneau | Oui – 6 tâches |
-| Mesure tension string | `carte_mesure_tension/` | 13 | Tensions/courant sur 5 branches | Non |
-| Supervision | `carte_supervision/` | – | Relais série vers CAN | Non |
+| Carte | Dossier | N° carte | Rôle principal | Architecture |
+|-------|---------|:--------:|----------------|:---:|
+| Alimentation | `carte_alimentation/` | 12 | Contrôle relais + LEDs état | Séquentielle |
+| Météo | `carte_meteo/` | 10 | Température, humidité, irradiance | Séquentielle |
+| Mesure I-V | `carte_vi/` | 1 à 5 | Courbe courant-tension du panneau | Séquentielle |
+| Mesure tension string | `carte_mesure_tension/` | 13 | Tensions/courant sur 5 branches | FreeRTOS (à convertir) |
+| Supervision | `carte_supervision/` | – | Relais série vers CAN | Séquentielle |
 
 ---
 
 ## Protocole CAN
 
-### IDs des messages
+### Organisation par zones
+
+Les identifiants sont organisés en **zones de 256 IDs** selon les 4 bits de poids fort. Cette structure permet à chaque carte d'utiliser un filtre matériel pour ne recevoir que les messages qui la concernent.
+
+| Zone | Plage | Destinataire / source |
+|:---:|:---:|---|
+| `0x0xx` | 0x000 – 0x0FF | Broadcast (toutes les cartes écoutent) |
+| `0x1xx` | 0x100 – 0x1FF | Carte Alimentation |
+| `0x2xx` | 0x200 – 0x2FF | Carte Météo |
+| `0x3xx` | 0x300 – 0x3FF | Cartes Mesure I-V |
+| `0x4xx` | 0x400 – 0x4FF | Carte Mesure Tension |
+
+Plus l'ID est petit, plus l'arbitrage CAN donne la priorité au message.
+
+### Identifiants des messages
 
 | ID | Nom | Direction | Description |
 |:--:|-----|-----------|-------------|
-| 0 | `CAN_ID_DEMANDE_NUM_CARTE` | Supervision vers Toutes | Demande d'identification |
-| 1 | `CAN_ID_DEMANDE_ALIMENTATION` | Supervision vers Alim | `data[0]` = 1 allume, 0 éteint |
-| 2 | `CAN_ID_DEMANDE_HUMIDITE` | Supervision vers Météo | Demande humidité seule |
-| 3 | `CAN_ID_DEMANDE_IRRADIANCE` | Supervision vers Météo | Demande irradiance seule |
-| 4 | `CAN_ID_DEMANDE_TEMP_EXTERIEUR` | Supervision vers Météo | Demande température ext. seule |
-| 5 | `CAN_ID_DEMANDE_HUM_IRR_TEMP_EXT` | Supervision vers Météo | Demande groupée : hum + irr + temp |
-| 7 | `CAN_ID_DEBUT_TRANSMISSION` | Carte vers Supervision | Marqueur début de séquence |
-| 8 | `CAN_ID_FIN_TRANSMISSION` | Carte vers Supervision | Marqueur fin de séquence |
-| 10 | `CAN_ID_RENVOI_NUM_CARTE` | Toutes vers Supervision | Numéro de la carte dans `data[0]` |
-| 11 | `CAN_ID_DEMANDE_MESURE_VI` | Supervision vers VI | `data[0]` = numéro de carte cible |
-| 12 | `CAN_ID_DEMANDE_TEMP_PANNEAU` | Supervision vers VI | `data[0]` = numéro de carte cible |
-| 18 | `CAN_ID_RENVOI_TEMP_PANNEAU` | VI vers Supervision | `data[0]`=signe, `data[1]`=°C, `data[2]`=n° carte |
-| 19 | `CAN_ID_RENVOI_MESURE_VI` | VI vers Supervision | `data[0-1]`=tension×100, `data[2-3]`=courant×100, `data[4]`=n° carte |
-| 42 | `CAN_ID_RENVOI_HUMIDITE` | Météo vers Supervision | `data[0-1]` = humidité × 100 |
-| 43 | `CAN_ID_RENVOI_TEMPERATURE` | Météo vers Supervision | `data[0-1]` = température × 100 |
-| 44 | `CAN_ID_RENVOI_IRRADIANCE` | Météo vers Supervision | `data[0-1]` = irradiance × 100 |
-| 45 | `CAN_ID_RENVOI_HUM_IRR_TEMP_EXT` | Météo vers Supervision | 6 octets : hum, temp, irr × 100 chacun |
-| 50 | `CAN_ID_DEMANDE_TENSION_STRING` | Supervision vers Tension | `data[0]` = numéro de string |
-| 51 | `CAN_ID_RENVOI_TENSION_STRING` | Tension vers Supervision | `data[0]`=indice, `data[1-2]`=valeur |
-| 52 | `CAN_ID_DEMANDE_COURANT_STRING` | Supervision vers Tension | `data[0]` = numéro de string |
-| 53 | `CAN_ID_RENVOI_COURANT_STRING` | Tension vers Supervision | `data[0]`=indice, `data[1-2]`=valeur |
+| `0x010` | `CAN_ID_DEBUT_TRANSMISSION` | Carte → Sup | Marqueur début de rafale |
+| `0x011` | `CAN_ID_FIN_TRANSMISSION` | Carte → Sup | Marqueur fin de rafale |
+| `0x020` | `CAN_ID_DEMANDE_NUM_CARTE` | Sup → Toutes | Demande d'identification |
+| `0x021` | `CAN_ID_RENVOI_NUM_CARTE` | Toutes → Sup | `data[0]` = numéro de carte |
+| `0x100` | `CAN_ID_DEMANDE_ALIMENTATION` | Sup → Alim | `data[0]` : 1=allumer, 0=éteindre |
+| `0x200` | `CAN_ID_DEMANDE_HUM_IRR_TEMP_EXT` | Sup → Météo | Mesure groupée (3 grandeurs) |
+| `0x201` | `CAN_ID_DEMANDE_HUMIDITE` | Sup → Météo | Humidité seule |
+| `0x202` | `CAN_ID_DEMANDE_TEMP_EXTERIEUR` | Sup → Météo | Température extérieure seule |
+| `0x203` | `CAN_ID_DEMANDE_IRRADIANCE` | Sup → Météo | Irradiance seule |
+| `0x280` | `CAN_ID_RENVOI_HUM_IRR_TEMP_EXT` | Météo → Sup | 6 octets : hum, temp, irr × 100 |
+| `0x281` | `CAN_ID_RENVOI_HUMIDITE` | Météo → Sup | humidité × 100 |
+| `0x282` | `CAN_ID_RENVOI_TEMPERATURE` | Météo → Sup | température × 100 |
+| `0x283` | `CAN_ID_RENVOI_IRRADIANCE` | Météo → Sup | irradiance × 100 |
+| `0x300` | `CAN_ID_DEMANDE_MESURE_VI` | Sup → VI | `data[0]` = numéro de carte cible |
+| `0x301` | `CAN_ID_DEMANDE_TEMP_PANNEAU` | Sup → VI | `data[0]` = numéro de carte cible |
+| `0x380` | `CAN_ID_RENVOI_MESURE_VI` | VI → Sup | `data[0-1]` V×100, `[2-3]` I×100, `[4]` n° carte |
+| `0x381` | `CAN_ID_RENVOI_TEMP_PANNEAU` | VI → Sup | `data[0]` signe, `[1]` °C, `[2]` n° carte |
+| `0x400` | `CAN_ID_DEMANDE_TENSION_STRING` | Sup → Tension | `data[0]` = numéro de string |
+| `0x401` | `CAN_ID_DEMANDE_COURANT_STRING` | Sup → Tension | `data[0]` = numéro de string |
+| `0x480` | `CAN_ID_RENVOI_TENSION_STRING` | Tension → Sup | `data[0]` indice, `[1-2]` valeur |
+| `0x481` | `CAN_ID_RENVOI_COURANT_STRING` | Tension → Sup | `data[0]` indice, `[1-2]` valeur |
 
 ### Encodage des flottants sur 2 octets
 
@@ -87,67 +101,24 @@ Décodage : valeur_float = (data[n] × 256 + data[n+1]) / 100.0
 
 ---
 
-## Carte Météo – Architecture FreeRTOS
+## Patron de programmation séquentiel (ISR + flag)
 
-```mermaid
-graph LR
-    ISR_CAN["ISR OnReceiveCan<br/>interruption CAN"]
-    ISR_SER["ISR OnReceiveSerial<br/>interruption UART"]
-
-    ISR_CAN -->|SetBitsFromISR| EG["systemEventGroup"]
-    ISR_SER -->|SetBitsFromISR| SEG["serialEventGroup"]
-
-    EG -->|EVENT_HUM/TEMP/ALL_TH| TH["TaskMesureHumiditeTemperature<br/>prio 9"]
-    EG -->|EVENT_IRR/ALL_IRR| TI["TaskMesureIrradiance<br/>prio 9"]
-    EG -->|EVENT_ALL_REG| TR["TaskRegroupementDonnee<br/>prio 9"]
-    EG -->|EVENT_CARD_NUM| TN["TaskEnvoiNumeroCarte<br/>prio 9"]
-    SEG -->|EVENT_SERIAL_MSG_RX| TS["TaskTraitementMessagesSerie<br/>prio 10"]
-
-    TH -->|xQueueSend| TQ["canTxQueue"]
-    TH -->|xQueueSend| THQ["tempHumQueue"]
-    TI -->|xQueueSend| TQ
-    TI -->|xQueueSend| IQ["irrQueue"]
-    THQ -->|xQueueReceive| TR
-    IQ -->|xQueueReceive| TR
-    TR -->|xQueueSend| TQ
-    TN -->|xQueueSend| TQ
-    TQ -->|xQueueReceive| TX["TaskEnvoiMessageCan<br/>prio 10"]
-    TX --> BUS["Bus CAN"]
-```
-
-| Tâche | Priorité | Pile | Rôle |
-|-------|:--------:|:----:|------|
-| `TaskEnvoiMessageCan` | 10 | 3072 | Envoie les trames en attente dans `canTxQueue` |
-| `TaskTraitementMessagesSerie` | 10 | 2048 | Interprète les commandes série |
-| `TaskMesureHumiditeTemperature` | 9 | 2048 | Lit le capteur AM2315 via I2C |
-| `TaskMesureIrradiance` | 9 | 2048 | Lit la cellule photoélectrique (ADC) |
-| `TaskRegroupementDonnee` | 9 | 2048 | Assemble les mesures en un seul message CAN |
-| `TaskEnvoiNumeroCarte` | 9 | 2048 | Répond aux demandes d'identification |
-
----
-
-## Carte VI – Architecture FreeRTOS
-
-| Tâche | Priorité | Pile | Rôle |
-|-------|:--------:|:----:|------|
-| `TaskEnvoiMessageCan` | 10 | 2048 | Envoie les trames CAN de `balTxCanMsg` |
-| `TaskTraitementMessageSerie` | 9 | 3072 | Interprète les commandes série |
-| `TaskMesureCourbeVI` | 5 | 4096 | Trace la courbe I-V complète (23 points) |
-| `TaskMesurePointVI` | 5 | 3072 | Mesure un point I-V à alpha fixé |
-| `TaskMesureTemperatureTc74` | 5 | 3072 | Lit le capteur de température TC74 (I2C) |
-| `TaskEnvoiNumCarte` | 5 | 2048 | Répond aux demandes d'identification |
-
-### Algorithme de la courbe I-V
+Toutes les cartes (sauf mesure_tension) utilisent le même schéma :
 
 ```mermaid
 flowchart TD
-    A["Déclenchement CAN ou Série"] --> B["Mesurer Icc alpha=100%"]
-    B --> C["Mesurer V0 alpha=0%"]
-    C --> D["Répartir 23 points en échelle logarithmique"]
-    D --> E["Calculer alpha pour chaque point<br/>R_eq = V/I"]
-    E --> F["Mesurer chaque point réel<br/>MesureVI()"]
-    F --> G["Envoyer sur CAN<br/>DEBUT + 23 trames + FIN"]
+    SETUP["setup()\nInit matériel + callbacks"] --> LOOP
+
+    LOOP["loop()\ncanAvailable ?"]
+    LOOP -->|non| LOOP
+    LOOP -->|oui| COPY["Copie rxMsg → rxMsgLocal\ncanAvailable = false"]
+    COPY --> DISPATCH["Appel de la fonction\nselon rxMsgLocal.id"]
+
+    ISR["ISR OnReceiveCan()\nlit id/len/data\nstocke dans rxMsg\ncanAvailable = true"]
+    ISR -.->|interruption| LOOP
 ```
+
+L'interruption CAN ne fait que mémoriser le message et lever un drapeau ; tout le traitement (mesure, calcul, envoi) se fait dans le `loop()` hors interruption.
 
 ---
 
@@ -265,22 +236,24 @@ Projet_LAOS/
 │   └── src/
 │       ├── main_carte_alimentation.cpp
 │       └── can_id.h
-├── carte_meteo/                     # Mesures météorologiques (FreeRTOS)
+├── carte_meteo/                     # Mesures météorologiques
 │   └── src/
 │       ├── main_carte_meteo.cpp
 │       └── can_id.h
-├── carte_vi/                        # Caractérisation I-V panneau (FreeRTOS)
+├── carte_vi/                        # Caractérisation I-V panneau
 │   └── src/
 │       ├── main_carte_vi.cpp
 │       ├── main_carte_vi.h
-│       ├── TC74.cpp / TC74.h
+│       ├── tc74.cpp / tc74.h
 │       └── can_id.h
-├── carte_mesure_tension/            # Mesure tensions strings
+├── carte_mesure_tension/            # Mesure tensions strings (encore FreeRTOS)
 │   └── src/
-│       └── main_carte_mesure_tension.cpp
+│       ├── main_carte_mesure_tension.cpp
+│       └── can_id.h
 ├── carte_supervision/               # Interface série vers CAN
 │   └── src/
-│       └── main_supervision.cpp
+│       ├── main_supervision.cpp
+│       └── can_id.h
 ├── docs/                            # Documentation détaillée
 └── Doxyfile                         # Configuration Doxygen
 ```
@@ -292,7 +265,7 @@ Projet_LAOS/
 | Technologie | Usage |
 |-------------|-------|
 | ESP32 (Xtensa LX6) | Microcontrôleur principal de chaque carte |
-| FreeRTOS | Multitâche sur cartes Météo et VI |
+| Arduino framework (ESP32) | Couche d'abstraction matérielle |
 | CAN bus 10 kbps | Communication inter-cartes |
 | PlatformIO | Build system et gestion des dépendances |
 | Adafruit AM2315 | Capteur température/humidité (I2C) |

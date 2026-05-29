@@ -7,14 +7,14 @@ Le projet LAOS est composé de **5 types de cartes ESP32** reliées par un bus C
 ```mermaid
 graph TD
     PC["Ordinateur PC<br/>Interface série USB"]
-    SUP["Carte Supervision<br/>main_supervision.cpp"]
+    SUP["Carte Supervision"]
 
     PC -->|UART 115200 baud| SUP
 
-    SUP -->|CAN ID 0-53| ALIM
-    SUP -->|CAN ID 0-53| METEO
-    SUP -->|CAN ID 0-53| VI
-    SUP -->|CAN ID 0-53| TEN
+    SUP -->|CAN zone 0x1xx| ALIM
+    SUP -->|CAN zone 0x2xx| METEO
+    SUP -->|CAN zone 0x3xx| VI
+    SUP -->|CAN zone 0x4xx| TEN
 
     ALIM["Carte Alimentation n°12<br/>Relais GPIO 25<br/>LED verte GPIO 18<br/>LED rouge GPIO 19"]
     METEO["Carte Météo n°10<br/>AM2315 I2C Temp+Hum<br/>Cellule photoélec. GPIO 34"]
@@ -47,32 +47,32 @@ sequenceDiagram
 
     Note over PC,TEN: Initialisation - identification des cartes
     PC->>SUP: N
-    SUP->>ALI: CAN ID=0
-    SUP->>MET: CAN ID=0
-    SUP->>VI: CAN ID=0
-    SUP->>TEN: CAN ID=0
-    ALI-->>SUP: CAN ID=10 data=12
-    MET-->>SUP: CAN ID=10 data=10
-    VI-->>SUP: CAN ID=10 data=X
-    TEN-->>SUP: CAN ID=10 data=13
+    SUP->>ALI: CAN 0x020
+    SUP->>MET: CAN 0x020
+    SUP->>VI: CAN 0x020
+    SUP->>TEN: CAN 0x020
+    ALI-->>SUP: CAN 0x021 data=12
+    MET-->>SUP: CAN 0x021 data=10
+    VI-->>SUP: CAN 0x021 data=X
+    TEN-->>SUP: CAN 0x021 data=13
     SUP-->>PC: 0;12 / 0;10 / ...
 
     Note over PC,TEN: Mesure météo groupée
     PC->>SUP: M
-    SUP->>MET: CAN ID=5
-    MET-->>SUP: CAN ID=7 DEBUT
-    MET-->>SUP: CAN ID=45 hum+temp+irr
-    MET-->>SUP: CAN ID=8 FIN
+    SUP->>MET: CAN 0x200
+    MET-->>SUP: CAN 0x010 DEBUT
+    MET-->>SUP: CAN 0x280 hum+temp+irr
+    MET-->>SUP: CAN 0x011 FIN
     SUP-->>PC: 10;hum;temp;irr
 
     Note over PC,TEN: Mesure courbe I-V carte n°3
     PC->>SUP: VI 3
-    SUP->>VI: CAN ID=11 data=3
-    VI-->>SUP: CAN ID=7 DEBUT
+    SUP->>VI: CAN 0x300 data=3
+    VI-->>SUP: CAN 0x010 DEBUT
     loop 23 fois
-        VI-->>SUP: CAN ID=19 tension+courant+n°carte
+        VI-->>SUP: CAN 0x380 tension+courant+n°carte
     end
-    VI-->>SUP: CAN ID=8 FIN
+    VI-->>SUP: CAN 0x011 FIN
     SUP-->>PC: 1;3;V;I x23
 ```
 
@@ -80,13 +80,15 @@ sequenceDiagram
 
 ## Anti-collision CAN pour l'identification
 
-Lors d'une demande `CAN_ID_DEMANDE_NUM_CARTE`, toutes les cartes répondent. Pour éviter les collisions, chaque carte attend avant de répondre :
+Lors d'une demande `CAN_ID_DEMANDE_NUM_CARTE`, toutes les cartes répondent avec le même ID `CAN_ID_RENVOI_NUM_CARTE` (0x021). Pour éviter qu'elles ne tentent d'émettre simultanément (ce qui causerait une erreur de bus, car le contenu des trames diffère), chaque carte doit attendre un délai proportionnel à son numéro avant de répondre :
 
 ```
 délai = numCarte × 10 ms
 ```
 
 La carte n°1 répond après 10 ms, la n°12 après 120 ms, etc.
+
+> **État actuel :** seule la **carte Alimentation** applique ce délai dans le code (`delay(10 * numCarte)`). Les cartes Météo et VI répondent immédiatement — c'est un point à corriger pour fiabiliser l'identification multi-cartes.
 
 ---
 
