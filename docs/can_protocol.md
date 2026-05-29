@@ -33,11 +33,14 @@ Au sein d'une zone, les **demandes** (Supervision → Carte) sont en `0xZ0x..0xZ
 
 | ID | Nom symbolique | Direction | Longueur | Description |
 |:--:|----------------|-----------|:--------:|-------------|
+| **— Zone broadcast (0x000 – 0x0FF) —** | | | | |
 | `0x010` | `CAN_ID_DEBUT_TRANSMISSION` | Carte → Sup | 0 | Marqueur début de rafale multi-trames |
 | `0x011` | `CAN_ID_FIN_TRANSMISSION` | Carte → Sup | 0 | Marqueur fin de rafale multi-trames |
 | `0x020` | `CAN_ID_DEMANDE_NUM_CARTE` | Sup → Toutes | 0 | Demande d'identification générale |
 | `0x021` | `CAN_ID_RENVOI_NUM_CARTE` | Toutes → Sup | 1 | `data[0]` = numéro de la carte |
+| **— Zone Alimentation (0x100 – 0x1FF) —** | | | | |
 | `0x100` | `CAN_ID_DEMANDE_ALIMENTATION` | Sup → Alim | 1 | `data[0]` : 1=allumer, 0=éteindre |
+| **— Zone Météo (0x200 – 0x2FF) —** | | | | |
 | `0x200` | `CAN_ID_DEMANDE_HUM_IRR_TEMP_EXT` | Sup → Météo | 0 | Demande groupée (3 mesures) |
 | `0x201` | `CAN_ID_DEMANDE_HUMIDITE` | Sup → Météo | 0 | Demande humidité seule |
 | `0x202` | `CAN_ID_DEMANDE_TEMP_EXTERIEUR` | Sup → Météo | 0 | Demande température extérieure |
@@ -46,10 +49,12 @@ Au sein d'une zone, les **demandes** (Supervision → Carte) sont en `0xZ0x..0xZ
 | `0x281` | `CAN_ID_RENVOI_HUMIDITE` | Météo → Sup | 2 | `data[0-1]` = humidité × 100 |
 | `0x282` | `CAN_ID_RENVOI_TEMPERATURE` | Météo → Sup | 2 | `data[0-1]` = température × 100 |
 | `0x283` | `CAN_ID_RENVOI_IRRADIANCE` | Météo → Sup | 2 | `data[0-1]` = irradiance × 100 |
+| **— Zone Mesure I-V (0x300 – 0x3FF) —** | | | | |
 | `0x300` | `CAN_ID_DEMANDE_MESURE_VI` | Sup → VI | 1 | `data[0]` = numéro de carte cible |
 | `0x301` | `CAN_ID_DEMANDE_TEMP_PANNEAU` | Sup → VI | 1 | `data[0]` = numéro de carte cible |
 | `0x380` | `CAN_ID_RENVOI_MESURE_VI` | VI → Sup | 5 | `data[0-1]`=V×100, `[2-3]`=I×100, `[4]`=n° carte |
 | `0x381` | `CAN_ID_RENVOI_TEMP_PANNEAU` | VI → Sup | 3 | `data[0]`=signe, `[1]`=°C, `[2]`=n° carte |
+| **— Zone Mesure Tension (0x400 – 0x4FF) —** | | | | |
 | `0x400` | `CAN_ID_DEMANDE_TENSION_STRING` | Sup → Tension | 1 | `data[0]` = numéro de string |
 | `0x401` | `CAN_ID_DEMANDE_COURANT_STRING` | Sup → Tension | 1 | `data[0]` = numéro de string |
 | `0x480` | `CAN_ID_RENVOI_TENSION_STRING` | Tension → Sup | 3 | `data[0]`=indice, `[1-2]`=valeur |
