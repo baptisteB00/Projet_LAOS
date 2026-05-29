@@ -36,42 +36,30 @@ Il peut exister **jusqu'à 5 cartes VI** sur le bus, numérotées de 1 à 5 via 
 
 ---
 
-## Tâches FreeRTOS
+## Fonctionnement séquentiel
 
-| Tâche | Priorité | Pile (octets) | Rôle |
-|-------|:--------:|:-------------:|------|
-| `TaskEnvoiMessageCan` | 10 | 2048 | Seul point d'écriture sur le bus CAN |
-| `TaskTraitementMessageSerie` | 9 | 3072 | Interprète les commandes série |
-| `TaskMesureCourbeVI` | 5 | 4096 | Trace la courbe complète (23 points) |
-| `TaskMesurePointVI` | 5 | 3072 | Mesure un point à alpha fixé |
-| `TaskMesureTemperatureTc74` | 5 | 3072 | Lecture température TC74 |
-| `TaskEnvoiNumCarte` | 5 | 2048 | Répond aux demandes d'identification |
+Le programme utilise le patron **ISR + flag** : l'interruption CAN stocke le message reçu et lève un drapeau ; `loop()` surveille ce drapeau et appelle la fonction de traitement correspondante.
 
----
+```mermaid
+flowchart TD
+    SETUP["setup()\nInit Serial, CAN, TC74\nLecture DIP switch → numCarte\nConfig PWM et relais"]
+    SETUP --> LOOP
 
-## Objets FreeRTOS
+    LOOP["loop()\ncanAvailable == false ?"]
+    LOOP -->|oui| LOOP
+    LOOP -->|non| COPY
 
-| Objet | Type | Capacité | Rôle |
-|-------|------|:--------:|------|
-| `flagsSystemeEvent` | Event Group | – | Événements CAN et série |
-| `flagsMessageSerial` | Event Group | – | Signal réception série |
-| `mutexSerialLink` | Mutex | – | Accès exclusif à `Serial.printf()` |
-| `mutexCanLink` | Mutex | – | Accès exclusif à la file CAN |
-| `balTxCanMsg` | Queue | 20 msg | Messages CAN à envoyer |
-| `balRapportCyclique` | Queue | 10 pts | Points I-V demandés par la tâche série |
+    COPY["Copie rxMsg → rxMsgLocal\ncanAvailable = false"]
+    COPY --> DISPATCH
 
----
+    DISPATCH{"ID du message reçu ?"}
+    DISPATCH -->|"CAN_ID_DEMANDE_MESURE_VI"| MCVI["MesureCourbeVI()"]
+    DISPATCH -->|"CAN_ID_DEMANDE_TEMP_PANNEAU"| MTT["MesureTemperatureTc74()"]
+    DISPATCH -->|"CAN_ID_DEMANDE_NUM_CARTE"| ENC["EnvoiNumCarte()"]
 
-## Bits d'événements
-
-| Bit | Constante | Source | Tâche réveillée |
-|:---:|-----------|--------|-----------------|
-| BIT1 | `FLAG_CAN_TEMPERATURE` | ISR CAN ID=12 | `TaskMesureTemperatureTc74` |
-| BIT2 | `FLAG_CAN_VI_ALL` | ISR CAN ID=11 | `TaskMesureCourbeVI` |
-| BIT3 | `FLAG_CAN_NUM_CARTE` | ISR CAN ID=0 | `TaskEnvoiNumCarte` |
-| BIT10 | `BIT_SERIAL_MSG` | ISR UART | `TaskTraitementMessageSerie` |
-| BIT11 | `FLAG_SERIE_TEMPERATURE` | Tâche série cmd T | `TaskMesureTemperatureTc74` |
-| BIT12 | `FLAG_SERIE_VI_ALL` | Tâche série cmd A | `TaskMesureCourbeVI` |
+    ISR["ISR OnReceiveCan()\nlit id, len, data[]\nstocke dans rxMsg\ncanAvailable = true"]
+    ISR -.->|interruption matérielle| LOOP
+```
 
 ---
 

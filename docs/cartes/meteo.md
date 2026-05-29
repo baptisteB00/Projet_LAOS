@@ -16,78 +16,34 @@ Mesure les conditions environnementales autour du panneau solaire : **températu
 
 - **Numéro de carte :** 10 (fixe dans le firmware)
 - **Vitesse CAN :** 10 kbps
-- **FreeRTOS :** Oui – 6 tâches
 
 ---
 
-## Objets FreeRTOS
+## Fonctionnement séquentiel
 
-| Objet | Type | Capacité | Rôle |
-|-------|------|:--------:|------|
-| `systemEventGroup` | Event Group | – | Réveille les tâches selon le type de demande CAN |
-| `serialEventGroup` | Event Group | – | Signale la réception d'un caractère série |
-| `serialMutex` | Mutex | – | Accès exclusif à `Serial.printf()` |
-| `canTxQueue` | Queue | 5 msg | File des messages CAN à envoyer |
-| `tempHumQueue` | Queue | 3 elem | Partage temp+hum vers `TaskRegroupementDonnee` |
-| `irrQueue` | Queue | 3 elem | Partage irradiance vers `TaskRegroupementDonnee` |
-
----
-
-## Bits d'événements
-
-| Bit | Constante | Levé par | Attendu par |
-|:---:|-----------|----------|-------------|
-| BIT0 | `EVENT_TEMP` | `OnReceiveCan` ID=4 | `TaskMesureHumiditeTemperature` |
-| BIT1 | `EVENT_HUM` | `OnReceiveCan` ID=2 | `TaskMesureHumiditeTemperature` |
-| BIT2 | `EVENT_IRR` | `OnReceiveCan` ID=3 | `TaskMesureIrradiance` |
-| BIT3 | `EVENT_ALL_TEMP_HUM` | `OnReceiveCan` ID=5 | `TaskMesureHumiditeTemperature` |
-| BIT4 | `EVENT_ALL_IRR` | `OnReceiveCan` ID=5 | `TaskMesureIrradiance` |
-| BIT5 | `EVENT_ALL_REG` | `OnReceiveCan` ID=5 | `TaskRegroupementDonnee` |
-| BIT6 | `EVENT_CARD_NUM` | `OnReceiveCan` ID=0 | `TaskEnvoiNumeroCarte` |
-| BIT7 | `EVENT_SERIAL_MSG_RX` | `OnReceiveSerial` | `TaskTraitementMessagesSerie` |
-
----
-
-## Tâches FreeRTOS
-
-| Tâche | Priorité | Pile (octets) | Événement attendu | Sortie |
-|-------|:--------:|:-------------:|-------------------|--------|
-| `TaskEnvoiMessageCan` | 10 | 3072 | `canTxQueue` bloquant | CAN bus |
-| `TaskTraitementMessagesSerie` | 10 | 2048 | `EVENT_SERIAL_MSG_RX` | `systemEventGroup` |
-| `TaskMesureHumiditeTemperature` | 9 | 2048 | `EVENT_HUM / TEMP / ALL_TH` | `canTxQueue` ou `tempHumQueue` |
-| `TaskMesureIrradiance` | 9 | 2048 | `EVENT_IRR / ALL_IRR` | `canTxQueue` ou `irrQueue` |
-| `TaskRegroupementDonnee` | 9 | 2048 | `EVENT_ALL_REG` | `canTxQueue` |
-| `TaskEnvoiNumeroCarte` | 9 | 2048 | `EVENT_CARD_NUM` | `canTxQueue` |
-
----
-
-## Diagramme de flux FreeRTOS
+Le programme utilise le patron **ISR + flag** : l'interruption CAN stocke le message reçu et lève un drapeau ; `loop()` surveille ce drapeau et appelle la fonction de mesure correspondante.
 
 ```mermaid
-graph LR
-    CAN_ISR["ISR OnReceiveCan<br/>interruption CAN"]
-    SER_ISR["ISR OnReceiveSerial<br/>interruption UART"]
+flowchart TD
+    SETUP["setup()\nInit Serial, CAN, AM2315\nConfig broche irradiance GPIO 34"]
+    SETUP --> LOOP
 
-    CAN_ISR -->|SetBitsFromISR| EG["systemEventGroup"]
-    SER_ISR -->|SetBitsFromISR| SerEG["serialEventGroup"]
+    LOOP["loop()\ncanAvailable == false ?"]
+    LOOP -->|oui| LOOP
+    LOOP -->|non| COPY
 
-    EG -->|BIT0/1/3| TH["TaskMesure<br/>HumiditeTemperature"]
-    EG -->|BIT2/4| TI["TaskMesure<br/>Irradiance"]
-    EG -->|BIT5| TR["TaskRegroupement<br/>Donnee"]
-    EG -->|BIT6| TN["TaskEnvoi<br/>NumeroCarte"]
-    SerEG -->|BIT7| TS["TaskTraitement<br/>MessagesSerie"]
+    COPY["Copie rxMsg → rxMsgLocal\ncanAvailable = false"]
+    COPY --> DISPATCH
 
-    TH -->|mesures indiv.| CTX["canTxQueue"]
-    TH -->|mesure groupee| THQ["tempHumQueue"]
-    TI -->|mesures indiv.| CTX
-    TI -->|mesure groupee| IQ["irrQueue"]
-    THQ --> TR
-    IQ --> TR
-    TR --> CTX
-    TN --> CTX
+    DISPATCH{"ID du message reçu ?"}
+    DISPATCH -->|"CAN_ID_DEMANDE_HUMIDITE"| MH["MesureHumidite()"]
+    DISPATCH -->|"CAN_ID_DEMANDE_TEMP_EXTERIEUR"| MT["MesureTemperature()"]
+    DISPATCH -->|"CAN_ID_DEMANDE_IRRADIANCE"| MI["MesureIrradiance()"]
+    DISPATCH -->|"CAN_ID_DEMANDE_HUM_IRR_TEMP_EXT"| MHTI["MesureHumiditeTemperatureIrradiance()"]
+    DISPATCH -->|"CAN_ID_DEMANDE_NUM_CARTE"| ENC["EnvoiNumeroCarte()"]
 
-    CTX --> TX["TaskEnvoi<br/>MessageCan"]
-    TX --> BUS["Bus CAN"]
+    ISR["ISR OnReceiveCan()\nlit id, len, data[]\nstocke dans rxMsg\ncanAvailable = true"]
+    ISR -.->|interruption matérielle| LOOP
 ```
 
 ---
@@ -102,8 +58,6 @@ data[0] = humidityInt / 256;   // octet fort
 data[1] = humidityInt % 256;   // octet faible
 ```
 
-En cas d'échec de lecture du capteur AM2315 (`isnan()`), la tâche effectue de nouvelles tentatives en boucle jusqu'à obtenir une valeur valide.
-
 ---
 
 ## Format du message groupé (ID=45)
@@ -113,5 +67,3 @@ En cas d'échec de lecture du capteur AM2315 (`isnan()`), la tâche effectue de 
 | data[0-1] | Humidité | humidité × 100, 16 bits BE |
 | data[2-3] | Température | température × 100, 16 bits BE |
 | data[4-5] | Irradiance | irradiance × 100, 16 bits BE |
-
-En cas de timeout (2 s pour irradiance, 5 s pour temp+hum), les octets correspondants sont mis à `0xFF`.

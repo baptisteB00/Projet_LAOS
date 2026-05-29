@@ -96,7 +96,7 @@ La carte n°1 répond après 10 ms, la n°12 après 120 ms, etc.
 |--------|-------------|------|
 | Matériel | ESP32 Xtensa LX6 dual-core 240 MHz | MCU de chaque carte |
 | Réseau | CAN 2.0A, 10 kbps, trames standard 11 bits | Communication inter-cartes |
-| OS temps réel | FreeRTOS (intégré Arduino ESP32) | Multitâche sur cartes Météo et VI |
+| Framework | Arduino (ESP32) | Couche d'abstraction matérielle |
 | Build system | PlatformIO | Compilation, dépendances, flash |
 | Capteurs | AM2315 I2C, TC74 I2C, ADC interne ESP32 | Acquisition physique |
 | Actionneurs | Relais GPIO, PWM 50 kHz 9 bits | Contrôle charge et alimentation |
