@@ -40,7 +40,7 @@ graph TD
 | Alimentation | `carte_alimentation/` | 12 | Contrôle relais + LEDs état | Séquentielle |
 | Météo | `carte_meteo/` | 10 | Température, humidité, irradiance | Séquentielle |
 | Mesure I-V | `carte_vi/` | 1 à 5 | Courbe courant-tension du panneau | Séquentielle |
-| Mesure tension string | `carte_mesure_tension/` | 13 | Tensions/courant sur 5 branches | FreeRTOS (à convertir) |
+| Mesure tension string | `carte_mesure_tension/` | 13 | Tensions/courant sur 4 strings × 5 branches | Séquentielle |
 | Supervision | `carte_supervision/` | – | Relais série vers CAN | Séquentielle |
 
 ---
@@ -87,10 +87,10 @@ Plus l'ID est petit, plus l'arbitrage CAN donne la priorité au message.
 | `0x380` | `CAN_ID_RENVOI_MESURE_VI` | VI → Sup | `data[0-1]` V×100, `[2-3]` I×100, `[4]` n° carte |
 | `0x381` | `CAN_ID_RENVOI_TEMP_PANNEAU` | VI → Sup | `data[0]` signe, `[1]` °C, `[2]` n° carte |
 | **— Zone Mesure Tension (0x400 – 0x4FF) —** | | | |
-| `0x400` | `CAN_ID_DEMANDE_TENSION_STRING` | Sup → Tension | `data[0]` = numéro de string |
-| `0x401` | `CAN_ID_DEMANDE_COURANT_STRING` | Sup → Tension | `data[0]` = numéro de string |
-| `0x480` | `CAN_ID_RENVOI_TENSION_STRING` | Tension → Sup | `data[0]` indice, `[1-2]` valeur |
-| `0x481` | `CAN_ID_RENVOI_COURANT_STRING` | Tension → Sup | `data[0]` indice, `[1-2]` valeur |
+| `0x400` | `CAN_ID_DEMANDE_TENSION_STRING` | Sup → Tension | `data[0]` = numéro de string (1–4) |
+| `0x401` | `CAN_ID_DEMANDE_COURANT_STRING` | Sup → Tension | Pas de data (DLC=0) |
+| `0x480` | `CAN_ID_RENVOI_TENSION_STRING` | Tension → Sup | `data[0]`=n° string, `[1]`=n° panneau, `[2-3]`=V×100 |
+| `0x481` | `CAN_ID_RENVOI_COURANT_STRING` | Tension → Sup | `data[0-1]`=I1×100, `[2-3]`=I2×100, `[4-5]`=I3×100, `[6-7]`=I4×100 |
 
 ### Encodage des flottants sur 2 octets
 
@@ -178,12 +178,15 @@ L'interruption CAN ne fait que mémoriser le message et lever un drapeau ; tout 
 
 | Commande | Exemple | Effet |
 |----------|---------|-------|
-| `R 1` | `R 1` | Allume le relais alimentation |
-| `R 0` | `R 0` | Éteint le relais alimentation |
+| `R <0\|1>` | `R 1` | Allume (1) ou éteint (0) le relais alimentation |
 | `M` | `M` | Demande les mesures météo groupées |
 | `VI <n>` | `VI 3` | Demande la courbe I-V de la carte n°3 |
 | `T <n>` | `T 2` | Demande la température du panneau sur la carte n°2 |
 | `N` | `N` | Demande l'identification de toutes les cartes |
+| `V <n>` | `V 2` | Demande les 5 tensions du string n°2 |
+| `C` | `C` | Demande les courants des 4 strings |
+
+La supervision retransmet les réponses CAN sur la liaison série au format CSV. Voir [`docs/serial_protocol.md`](docs/serial_protocol.md) pour le protocole complet.
 
 ### Carte VI – débogage local
 
@@ -205,6 +208,17 @@ L'interruption CAN ne fait que mémoriser le message et lever un drapeau ; tout 
 | Commande | Effet |
 |----------|-------|
 | `M` | Déclenche l'envoi groupé des mesures météo |
+
+### Carte Mesure Tension – débogage local
+
+| Commande | Exemple | Effet |
+|----------|---------|-------|
+| `R <n>` | `R 2` | Mesure les 5 tensions du string n°2 |
+| `T` | `T` | Mesure les courants des 4 strings |
+| `N` | `N` | Envoie le numéro de carte sur le bus CAN |
+
+> **Note :** Pour le protocole série complet (formats des réponses, schémas de flux), voir [`docs/serial_protocol.md`](docs/serial_protocol.md).
+> Pour le protocole CAN détaillé, voir [`docs/can_protocol.md`](docs/can_protocol.md).
 
 ---
 
