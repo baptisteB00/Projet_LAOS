@@ -116,10 +116,10 @@ sequenceDiagram
 
     PC->>SUP: "N\n"
     Note over SUP: émet 0x020 DEMANDE_NUM_CARTE (broadcast CAN)
-    SUP-->>PC: 0,10
-    SUP-->>PC: 0,12
-    SUP-->>PC: 0,13
-    SUP-->>PC: 0,X
+    SUP-->>PC: 0#59;10
+    SUP-->>PC: 0#59;12
+    SUP-->>PC: 0#59;13
+    SUP-->>PC: 0#59;X
     Note right of PC: une ligne par carte<br/>ordre variable (arbitrage CAN)
 ```
 
@@ -152,8 +152,8 @@ sequenceDiagram
     PC->>SUP: "M\n"
     Note over SUP: émet 0x200 DEMANDE_HUM_IRR_TEMP_EXT
     SUP-->>PC: 0
-    SUP-->>PC: 10,65.20,22.50,800.00
-    Note right of PC: hum, temp, irr
+    SUP-->>PC: 10#59;65.20#59;22.50#59;800.00
+    Note right of PC: hum#59;temp#59;irr
     SUP-->>PC: 9999
 ```
 
@@ -170,8 +170,8 @@ sequenceDiagram
     Note over SUP: émet 0x300 DEMANDE_MESURE_VI data[0]=3
     SUP-->>PC: 0
     loop 23 points
-        SUP-->>PC: 1,3,12.50,2.30
-        Note right of PC: carte, V, I
+        SUP-->>PC: 1#59;3#59;12.50#59;2.30
+        Note right of PC: carte#59;V#59;I
     end
     SUP-->>PC: 9999
 ```
@@ -187,8 +187,8 @@ sequenceDiagram
 
     PC->>SUP: "T 2\n"
     Note over SUP: émet 0x301 DEMANDE_TEMP_PANNEAU data[0]=2
-    SUP-->>PC: 2,2,45
-    Note right of PC: carte, T en degC
+    SUP-->>PC: 2#59;2#59;45
+    Note right of PC: carte#59;T(degC)
 ```
 
 ---
@@ -204,8 +204,8 @@ sequenceDiagram
     Note over SUP: émet 0x400 DEMANDE_TENSION_STRING data[0]=2
     SUP-->>PC: 0
     loop 5 panneaux (0 a 4)
-        SUP-->>PC: 20,2,0,48.53
-        Note right of PC: str, panneau, V
+        SUP-->>PC: 20#59;2#59;0#59;48.53
+        Note right of PC: str#59;panneau#59;V
     end
     SUP-->>PC: 9999
 ```
@@ -222,8 +222,8 @@ sequenceDiagram
     PC->>SUP: "C\n"
     Note over SUP: émet 0x401 DEMANDE_COURANT_STRING (DLC=0)
     SUP-->>PC: 0
-    SUP-->>PC: 21,2.10,2.05,1.98,2.12
-    Note right of PC: I1, I2, I3, I4 en amperes
+    SUP-->>PC: 21#59;2.10#59;2.05#59;1.98#59;2.12
+    Note right of PC: I1#59;I2#59;I3#59;I4 (A)
     SUP-->>PC: 9999
 ```
 
@@ -239,31 +239,31 @@ sequenceDiagram
     participant SUP as Supervision
 
     PC->>SUP: "N\n"
-    SUP-->>PC: 0,10
-    SUP-->>PC: 0,12
-    SUP-->>PC: 0,13
+    SUP-->>PC: 0#59;10
+    SUP-->>PC: 0#59;12
+    SUP-->>PC: 0#59;13
 
     PC->>SUP: "M\n"
     SUP-->>PC: 0
-    SUP-->>PC: 10,65.20,22.50,800.00
+    SUP-->>PC: 10#59;65.20#59;22.50#59;800.00
     SUP-->>PC: 9999
 
     PC->>SUP: "V 1\n"
     SUP-->>PC: 0
     loop 5 panneaux
-        SUP-->>PC: 20,1,N,V
+        SUP-->>PC: 20#59;1#59;N#59;V
     end
     SUP-->>PC: 9999
 
     PC->>SUP: "C\n"
     SUP-->>PC: 0
-    SUP-->>PC: 21,I1,I2,I3,I4
+    SUP-->>PC: 21#59;I1#59;I2#59;I3#59;I4
     SUP-->>PC: 9999
 
     PC->>SUP: "VI 1\n"
     SUP-->>PC: 0
     loop 23 points
-        SUP-->>PC: 1,1,V,I
+        SUP-->>PC: 1#59;1#59;V#59;I
     end
     SUP-->>PC: 9999
 ```
