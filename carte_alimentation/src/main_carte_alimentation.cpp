@@ -65,6 +65,7 @@ void setup()
   pinMode(PIN_RELAIS,    OUTPUT);
   pinMode(PIN_LED_VERTE, OUTPUT);
   pinMode(PIN_LED_ROUGE, OUTPUT);
+  ControleRelais(0);
 }
 
 /* ==================================================================== */

@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 #include <CAN.h>
+#include "can_id.h"
 
 #define MOYENNAGE 100
 
@@ -21,20 +22,25 @@
 #define PIN_SORTIE_MULTIPLEXEUR_3 34
 #define PIN_SORTIE_MULTIPLEXEUR_4 35
 
-typedef struct CANMessage
+#define FACTEUR_TENSION 0.081f
+#define FACTEUR_COURANT 0.003462f
+#define NUM_CARTE 13
+
+typedef struct CANMessage_t
 {
   unsigned int id = 0;
   char len = 0;
   unsigned char data[8] = {0};
-} CANMessage;
+} CANMessage_t;
 
-QueueHandle_t xBalTxCanMsg;
+CANMessage_t rxMsg;
+volatile bool canAvailable = false;
 
 void onReceiveCan(int packetSize);
-void onReceive(int packetSize);
 void set_multiplexeur(int chanel);
 float lecture_tension_multiplexeur(char numero);
-void mesure_string(char num_string);
+void mesure_tension_string(char num_string);
+void mesure_courant_string(void);
 void reception(char ch);
 void envoi_num_carte();
 
@@ -60,18 +66,31 @@ void setup(){
 	digitalWrite(PIN_SELECTION_MULTIPLEXEUR_B,LOW);
 	digitalWrite(PIN_SELECTION_MULTIPLEXEUR_C,LOW);
 
-	xBalTxCanMsg = xQueueCreate(12, sizeof(CANMessage));
 }
 
 
 void loop(){
-
-
+	CANMessage_t rxMsgLocal;
+	if (canAvailable == true){
+		rxMsgLocal = rxMsg;
+	    if (rxMsgLocal.id == CAN_ID_DEMANDE_TENSION_STRING)
+	    {
+		mesure_tension_string(rxMsgLocal.data[0]);
+	    }
+	    else if (rxMsgLocal.id == CAN_ID_DEMANDE_COURANT_STRING)
+	    {
+		mesure_courant_string();
+	    }
+	    else if (rxMsgLocal.id == CAN_ID_DEMANDE_NUM_CARTE)
+	    {
+		envoi_num_carte();
+	    }
+		canAvailable = false;
+	}
 }
 
 void onReceiveCan(int packetSize)
 {
-    CANMessage rxMsg;
     rxMsg.id = CAN.packetId();
     rxMsg.len = CAN.packetDlc();
     int i = 0;
@@ -80,27 +99,14 @@ void onReceiveCan(int packetSize)
         rxMsg.data[i] = CAN.read();
         i++;
     }
-
-    if (rxMsg.id == 50 )
-    {
-	mesure_string(rxMsg.data[0]);
-    }
-    else if (rxMsg.id == (0))
-    {
-	envoi_num_carte();
-    }
+	canAvailable = true;
 }
 
-void TACHE_envoie_message_CAN(void *pvParameters)
+void envoie_message_CAN(CANMessage_t TxMsg)
 {
-    CANMessage TxMsg;
-    while (1)
-    {
-        xQueueReceive(xBalTxCanMsg, &TxMsg, portMAX_DELAY);
-        CAN.beginPacket(TxMsg.id);
-        CAN.write(TxMsg.data, TxMsg.len);
-        CAN.endPacket();
-    }
+	CAN.beginPacket(TxMsg.id);
+	CAN.write(TxMsg.data, TxMsg.len);
+	CAN.endPacket();
 }
 
 void serialEvent()
@@ -113,7 +119,6 @@ void serialEvent()
 
 void reception(char ch)
 {
-  static int i = 0;
   static String chaine = "";
   String commande;
   String valeur;
@@ -137,8 +142,10 @@ void reception(char ch)
 
     if (commande == "R")
     {
-	mesure_string(valeur.toInt());
-    }
+	mesure_tension_string(valeur.toInt());
+    }else if(commande == "T"){
+	mesure_courant_string();
+	}
     else if (commande == "N")
     {
 	envoi_num_carte();
@@ -159,29 +166,67 @@ void reception(char ch)
  * envoie 6 trames CAN (ID=51) avec l'indice et la valeur encodée.
  * @param num_string Numéro du string (1 à 4, correspond à la sortie multiplexeur).
  */
-void mesure_string(char num_string){
-	CANMessage txMsg;
-	float mesure[6];
+void mesure_tension_string(char num_string){
+	CANMessage_t txMsg;
+	CANMessage_t marqueurMsg;
+	marqueurMsg.len = 0;
+	float mesure[5];
 	float facteur;
-	for (int i =0 ; i<6;i++){
-		if(i<5){
-			facteur = 0.081f;
-		}else{
-			facteur = 0.003462f;
-		}
+	if(num_string < 1 || num_string > 4) return;
+	for (int i =0 ; i<5;i++){
 		set_multiplexeur(i+1);
-		mesure[i] = lecture_tension_multiplexeur(num_string) * facteur;
+		mesure[i] = lecture_tension_multiplexeur(num_string) * FACTEUR_TENSION;
 	}
-	Serial.printf("STRING : %d \n\r tension 1 : %2.2f \n\r tension 2 : %2.2f\n\r tension 3 : %2.2f\n\r tension 4 : %2.2f\n\r tension 5 : %2.2f\n\r courant : %2.2f\n\r ",num_string,mesure[0],mesure[1],mesure[2],mesure[3],mesure[4],mesure[5]);
-	txMsg.len = 3;
-	txMsg.id = 51;
-	for (int i =0 ; i<6 ; i++){
-		int valeur = (int)(mesure[i] * 100); // encodage x100, comme le reste du projet
-		txMsg.data[0] = i;                    // indice : 0-4 = tensions, 5 = courant
-		txMsg.data[1] = valeur / 256;         // octet fort
-		txMsg.data[2] = valeur % 256;         // octet faible
-		xQueueSend(xBalTxCanMsg,&txMsg,portMAX_DELAY);
+
+	/* Marqueur de début de rafale */
+	marqueurMsg.id = CAN_ID_DEBUT_TRANSMISSION;
+	envoie_message_CAN(marqueurMsg);
+	txMsg.len = 4;
+	txMsg.id = CAN_ID_RENVOI_TENSION_STRING;
+	for (int i =0 ; i<5 ; i++){
+		int valeur_int = (int)(mesure[i] * 100); // encodage x100
+		txMsg.data[0] = num_string;
+		txMsg.data[1] = i;                    // indice : 0-4 = tensions, 5 = courant
+		txMsg.data[2] = valeur_int / 256;         // octet fort
+		txMsg.data[3] = valeur_int % 256;         // octet faible
+		Serial.printf("numero de string : %d , numero de panneau : %d , tension = %f\n\r",num_string,i+1,mesure[i]);
+		envoie_message_CAN(txMsg);
 	}
+
+
+	/* Marqueur de fin de rafale */
+	marqueurMsg.id = CAN_ID_FIN_TRANSMISSION;
+	envoie_message_CAN(marqueurMsg);
+}
+void mesure_courant_string(void){
+	CANMessage_t txMsg;
+	CANMessage_t marqueurMsg;
+	marqueurMsg.len = 0;
+	float mesure[4];
+	int valeur_int;
+
+	for (int i =0 ; i<4;i++){
+		set_multiplexeur(6);
+		mesure[i] = lecture_tension_multiplexeur(i) * FACTEUR_COURANT;
+	}
+
+	/* Marqueur de début de rafale */
+	marqueurMsg.id = CAN_ID_DEBUT_TRANSMISSION;
+	envoie_message_CAN(marqueurMsg);
+	txMsg.len = 8;
+	txMsg.id = CAN_ID_RENVOI_COURANT_STRING;
+	for (int i = 0 ; i< 4 ; i++){
+		valeur_int = (int)(mesure[i] * 100); // encodage x100
+		txMsg.data[2*i]   = valeur_int / 256;         // octet fort
+		txMsg.data[2*i+1] = valeur_int % 256;         // octet faible
+		Serial.printf("courant %d = %f\n\r",i,mesure[i]);
+	 }
+	envoie_message_CAN(txMsg);
+
+
+	/* Marqueur de fin de rafale */
+	marqueurMsg.id = CAN_ID_FIN_TRANSMISSION;
+	envoie_message_CAN(marqueurMsg);
 }
 /**
  * @brief Configure le multiplexeur pour sélectionner un canal.
@@ -218,9 +263,14 @@ void set_multiplexeur(int chanel){
 			inC = HIGH;
 		break;
 		case 6://case pour selectionner le courant
-			inA = LOW;
+			inA = HIGH;
 			inB = LOW;
 			inC = HIGH;
+		break;
+		default:// par defaut le multiplexeur mesure la tension 1 si on entre un numero non valide
+			inA = HIGH;
+			inB = HIGH;
+			inC = LOW;
 		break;
 
 	}
@@ -235,7 +285,7 @@ void set_multiplexeur(int chanel){
  * @return Valeur ADC brute moyennée, ou -1.0f si le numéro est invalide.
  */
 float lecture_tension_multiplexeur(char numero){
-	int lecture_tension = 0;
+	float lecture_tension = 0;
 	char pin;
 	switch(numero){
 		case 1:
@@ -251,12 +301,12 @@ float lecture_tension_multiplexeur(char numero){
 			pin = PIN_SORTIE_MULTIPLEXEUR_4;
 		break;
 		default:
-			return -1.0f;
+			pin = PIN_SORTIE_MULTIPLEXEUR_1;
 		break;
 	}
 
 	for (int i =0 ;i< MOYENNAGE;i++){
-		lecture_tension += analogRead(pin);
+		lecture_tension += analogReadMilliVolts(pin)*48.52f/1000.0f;
 	}
 
 	lecture_tension/=MOYENNAGE;
@@ -268,10 +318,10 @@ float lecture_tension_multiplexeur(char numero){
  * @brief Envoie le numéro de cette carte (13) sur le bus CAN (ID=10).
  */
 void envoi_num_carte(){
-	CANMessage txMsg;
-	txMsg.id = 10;
-	txMsg.data[0] = 13;
+	CANMessage_t txMsg;
+	txMsg.id = CAN_ID_RENVOI_NUM_CARTE;
+	txMsg.data[0] = NUM_CARTE;
 	txMsg.len = 1;
-	xQueueSend(xBalTxCanMsg,&txMsg,portMAX_DELAY);
+	envoie_message_CAN(txMsg);
 	Serial.println("numero de carte envoye");
 }

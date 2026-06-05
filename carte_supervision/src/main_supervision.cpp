@@ -46,6 +46,8 @@ void loop()
   float irradiance = 0.0f;
   int numero_carte = 0;
   int temperature_panneau = 0;
+  char num_string;
+  char num_panneau;
   if (canAvailable == true)
   {
     switch (rxMsg.id)
@@ -56,7 +58,7 @@ void loop()
       break;
 
     case CAN_ID_FIN_TRANSMISSION:
-      Serial.println("99");
+      Serial.println("9999");
       break;
 
     case CAN_ID_RENVOI_NUM_CARTE:
@@ -72,6 +74,7 @@ void loop()
       }
       numero_carte = rxMsg.data[2];
       Serial.printf("2;%2d;%d", numero_carte, temperature_panneau);
+      Serial.println();
       break;
 
     case CAN_ID_RENVOI_MESURE_VI:
@@ -113,8 +116,23 @@ void loop()
       Serial.println();
 
       break;
+      case CAN_ID_RENVOI_TENSION_STRING:
+        tension = (rxMsg.data[3] | rxMsg.data[2]<<8)/100.0f;
+        num_string = rxMsg.data[0];
+        num_panneau = rxMsg.data[1];
+        Serial.printf("20;%d;%d;%4.2f",num_string,num_panneau,tension);
+        Serial.println();
+      break;
+      case CAN_ID_RENVOI_COURANT_STRING:
+        float courant_string_1 = (rxMsg.data[1] | rxMsg.data[2]<<8)/100.0f;
+        float courant_string_2 = (rxMsg.data[3] | rxMsg.data[4]<<8)/100.0f;
+        float courant_string_3 = (rxMsg.data[5] | rxMsg.data[6]<<8)/100.0f;
+        float courant_string_4 = (rxMsg.data[7] | rxMsg.data[8]<<8)/100.0f;
+        Serial.printf("21;%2.2f;%2.2f;%2.2f;%2.2f\n\r",courant_string_1,courant_string_2,courant_string_3,courant_string_4);
+        Serial.println();
+      break;
     }
-    /*
+  /* 
     printf("ID  = %d\n", rxMsg.id);
     printf("Len = %d\n", rxMsg.len);
     if (rxMsg.len > 0)
@@ -125,7 +143,7 @@ void loop()
         Serial.print(rxMsg.data[i]);
         Serial.print(" ");
       }
-      Serial.println();
+     Serial.println();
     }*/
     canAvailable = false;
   }
@@ -205,6 +223,16 @@ void reception(char ch)
       CAN.write(valeur.toInt());
       CAN.endPacket();
     }
+    else if (commande == "V")
+    {
+      CAN.beginPacket(CAN_ID_DEMANDE_TENSION_STRING);
+      CAN.write(valeur.toInt());
+      CAN.endPacket();
+    }else if (commande == "C"){
+      CAN.beginPacket(CAN_ID_DEMANDE_COURANT_STRING);
+      CAN.endPacket();
+    }
+
 
     chaine = "";
   }
