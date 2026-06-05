@@ -1,3 +1,34 @@
+/**
+ * @file main_supervision.cpp
+ * @brief Carte Supervision – réception CAN et interface série avec le PC.
+ *
+ * Reçoit tous les messages CAN du bus et les retransmet sur la liaison série
+ * au format CSV pour traitement par le PC. Accepte également des commandes
+ * série pour envoyer des requêtes CAN vers les autres cartes.
+ *
+ * **Format des trames reçues (série → PC) :**
+ * - "0"                     : début de rafale (CAN_ID_DEBUT_TRANSMISSION)
+ * - "9999"                  : fin de rafale (CAN_ID_FIN_TRANSMISSION)
+ * - "0;<n>"                 : numéro de carte n (CAN_ID_RENVOI_NUM_CARTE)
+ * - "1;<carte>;<V>;<I>"     : mesure I-V (CAN_ID_RENVOI_MESURE_VI)
+ * - "2;<carte>;<T>"         : température panneau (CAN_ID_RENVOI_TEMP_PANNEAU)
+ * - "10;<hum>;<temp>;<irr>" : météo groupée (CAN_ID_RENVOI_HUM_IRR_TEMP_EXT)
+ * - "11;<hum>"              : humidité (CAN_ID_RENVOI_HUMIDITE)
+ * - "12;<temp>"             : température extérieure (CAN_ID_RENVOI_TEMPERATURE)
+ * - "13;<irr>"              : irradiance (CAN_ID_RENVOI_IRRADIANCE)
+ * - "20;<str>;<pan>;<V>"    : tension string (CAN_ID_RENVOI_TENSION_STRING)
+ * - "21;<I1>;<I2>;<I3>;<I4>": courants strings (CAN_ID_RENVOI_COURANT_STRING)
+ *
+ * **Commandes série (PC → carte) :**
+ * - "R <0|1>"   : allume (1) ou éteint (0) le relais alimentation
+ * - "M"         : demande météo groupée
+ * - "VI <n>"    : demande mesure I-V de la carte n
+ * - "T <n>"     : demande température panneau de la carte n
+ * - "N"         : demande numéro de toutes les cartes
+ * - "V <1-4>"   : demande tensions du string n
+ * - "C"         : demande courants des 4 strings
+ */
+
 #include <Arduino.h>
 #include <CAN.h>
 #include <can_id.h>
@@ -134,6 +165,13 @@ void loop()
   }
 }
 
+/**
+ * @brief Callback CAN – appelée à chaque trame reçue.
+ *
+ * Copie la trame dans rxMsg et lève canAvailable. Le traitement se fait
+ * dans loop() pour ne pas bloquer la réception d'autres trames.
+ * @param packetSize Taille de la trame reçue (fournie par la bibliothèque CAN).
+ */
 /* ==================================================================== */
 void onReceive(int packetSize)
 {
@@ -148,6 +186,9 @@ void onReceive(int packetSize)
   canAvailable = true;
 }
 
+/**
+ * @brief Événement Arduino – appelé automatiquement à chaque réception UART.
+ */
 /* ==================================================================== */
 void serialEvent()
 {
@@ -157,6 +198,14 @@ void serialEvent()
   }
 }
 
+/**
+ * @brief Analyse les caractères série un par un et envoie la commande CAN correspondante.
+ *
+ * Accumule les caractères jusqu'à CR/LF, découpe "COMMANDE VALEUR" puis
+ * construit et envoie la trame CAN adaptée. Voir la liste des commandes
+ * dans l'en-tête de fichier.
+ * @param ch Caractère reçu depuis la liaison série.
+ */
 /* ==================================================================== */
 void reception(char ch)
 {

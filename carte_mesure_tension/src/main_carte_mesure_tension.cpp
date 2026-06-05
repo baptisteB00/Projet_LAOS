@@ -1,9 +1,28 @@
 /**
  * @file main_carte_mesure_tension.cpp
- * @brief Carte Mesure Tension String – lecture des tensions/courant via multiplexeur.
+ * @brief Carte Mesure Tension String – lecture des tensions et courants via multiplexeur.
  *
- * Mesure les tensions des 5 branches (strings) et le courant du champ solaire
- * via un multiplexeur 8:1 connecté à 4 entrées ADC de l'ESP32.
+ * Mesure les tensions des 5 panneaux de chacun des 4 strings, ainsi que
+ * le courant de chaque string, via un multiplexeur 8:1 (6 canaux utilisés)
+ * connecté à 4 entrées ADC de l'ESP32.
+ *
+ * **Architecture :**
+ * - Le multiplexeur sélectionne la grandeur à mesurer (canaux 1–5 = tensions, 6 = courant).
+ * - Les 4 sorties ADC correspondent aux 4 strings (sélection via lecture_tension_multiplexeur).
+ * - Chaque mesure est la moyenne de MOYENNAGE lectures analogiques.
+ * - La tension brute (mV) est convertie en volts réels par le facteur 48.52/1000
+ *   qui représente le rapport du pont diviseur de tension externe.
+ *
+ * **Messages CAN reçus :**
+ * - CAN_ID_DEMANDE_TENSION_STRING : data[0]=numéro string → renvoie 5 trames de tension
+ * - CAN_ID_DEMANDE_COURANT_STRING : → renvoie 1 trame avec les 4 courants
+ * - CAN_ID_DEMANDE_NUM_CARTE      : → renvoie le numéro de cette carte (13)
+ *
+ * **Commandes série (débogage) :**
+ * - "R <1-4>" → mesure les tensions du string donné
+ * - "T"       → mesure les courants des 4 strings
+ * - "N"       → envoie le numéro de carte
+ *
  * Numéro de carte : 13 (fixe dans le firmware).
  */
 
@@ -166,8 +185,20 @@ void reception(char ch)
 }
 
 /**
- * @brief Mesure les 5 tensions d'un string.
- * @param num_string Numéro du string (1 à 4).
+ * @brief Mesure les tensions des 5 panneaux d'un string et les envoie sur le bus CAN.
+ *
+ * Pour chaque panneau (canaux multiplexeur 1 à 5), lit la tension via ADC
+ * (moyenne de MOYENNAGE lectures), applique FACTEUR_TENSION, puis envoie
+ * 5 trames CAN_ID_RENVOI_TENSION_STRING encadrées par CAN_ID_DEBUT_TRANSMISSION
+ * et CAN_ID_FIN_TRANSMISSION.
+ *
+ * Encodage de chaque trame (4 octets) :
+ * - data[0] = numéro string (1–4)
+ * - data[1] = indice panneau (0–4)
+ * - data[2] = octet fort de (tension × 100)
+ * - data[3] = octet faible de (tension × 100)
+ *
+ * @param num_string Numéro du string (1 à 4). Retourne immédiatement si invalide.
  */
 void mesure_tension_string(char num_string)
 {
@@ -206,6 +237,17 @@ void mesure_tension_string(char num_string)
 
 /**
  * @brief Mesure le courant des 4 strings et envoie une trame CAN de 8 octets.
+ *
+ * Pour chaque string (1 à 4), sélectionne le canal courant du multiplexeur (6),
+ * lit la valeur ADC, applique FACTEUR_COURANT, puis envoie une unique trame
+ * CAN_ID_RENVOI_COURANT_STRING encadrée par CAN_ID_DEBUT_TRANSMISSION
+ * et CAN_ID_FIN_TRANSMISSION.
+ *
+ * Encodage de la trame (8 octets, 2 par string) :
+ * - data[0–1] = courant string 1 × 100 (octet fort, octet faible)
+ * - data[2–3] = courant string 2 × 100
+ * - data[4–5] = courant string 3 × 100
+ * - data[6–7] = courant string 4 × 100
  */
 void mesure_courant_string(void)
 {
@@ -239,8 +281,19 @@ void mesure_courant_string(void)
 }
 
 /**
- * @brief Configure le multiplexeur pour sélectionner un canal.
- * @param chanel Canal à sélectionner : 1=V1, 2=V2, 3=V3, 4=V4, 5=V5, 6=courant.
+ * @brief Configure le multiplexeur 8:1 pour sélectionner un canal de mesure.
+ *
+ * Les 3 pins de sélection (A, B, C) commandent le multiplexeur selon le tableau :
+ * | Canal | A    | B    | C    | Grandeur  |
+ * |-------|------|------|------|-----------|
+ * |   1   | HIGH | HIGH | LOW  | Tension 1 |
+ * |   2   | LOW  | LOW  | LOW  | Tension 2 |
+ * |   3   | HIGH | LOW  | LOW  | Tension 3 |
+ * |   4   | LOW  | HIGH | LOW  | Tension 4 |
+ * |   5   | LOW  | LOW  | HIGH | Tension 5 |
+ * |   6   | HIGH | LOW  | HIGH | Courant   |
+ *
+ * @param chanel Canal à sélectionner (1–6). Valeur invalide → canal 1 par défaut.
  */
 void set_multiplexeur(int chanel)
 {
@@ -263,9 +316,16 @@ void set_multiplexeur(int chanel)
 }
 
 /**
- * @brief Lit la tension à la sortie du multiplexeur (moyenne de MOYENNAGE lectures).
+ * @brief Lit la tension à la sortie du multiplexeur pour un string donné.
+ *
+ * Effectue MOYENNAGE lectures via analogReadMilliVolts sur le pin ADC
+ * correspondant au string, puis divise la somme par MOYENNAGE pour obtenir
+ * la moyenne. Applique ensuite le rapport du pont diviseur externe (48.52/1000)
+ * pour convertir les millivolts ESP32 en tension réelle (en volts).
+ *
  * @param numero Numéro du string (1 à 4) → sélectionne le pin ADC correspondant.
- * @return Tension en volts moyennée.
+ *               Valeur invalide → utilise le pin du string 1 par défaut.
+ * @return Tension réelle moyennée en volts.
  */
 float lecture_tension_multiplexeur(char numero)
 {
