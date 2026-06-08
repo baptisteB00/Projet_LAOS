@@ -330,38 +330,31 @@ sequenceDiagram
 
 ---
 
-## Algorithme générique de réception CAN (patron ISR + flag)
-
-Toutes les cartes esclaves suivent le même schéma : l'interruption matérielle stocke la trame et lève un drapeau ; `loop()` traite le message hors interruption.
+## Algorithme générique de réception CAN
 
 ```mermaid
 flowchart TD
-    subgraph ISR["ISR OnReceiveCan() – interruption matérielle"]
-        I1["Lire id, len, data[] depuis le contrôleur CAN"]
-        I2["Stocker dans rxMsg"]
-        I3["canAvailable = true"]
-        I1 --> I2 --> I3
+    subgraph INT["Sur interruption matérielle"]
+        I1["Trame CAN reçue"] --> I2["Stockage de l'ID et des données"]
+        I2 --> I3["Signalement d'une trame en attente"]
     end
 
-    subgraph LOOP["loop() – traitement hors interruption"]
-        L1{"canAvailable ?"}
-        L2["Copier rxMsg → rxMsgLocal<br/>canAvailable = false"]
-        L3{"Dispatch sur rxMsgLocal.id"}
-        L4A["Traitement ID A"]
-        L4B["Traitement ID B"]
-        L4C["EnvoiNumCarte()"]
-        L1 -->|non| L1
-        L1 -->|oui| L2 --> L3
-        L3 -->|CAN_ID_DEMANDE_A| L4A
-        L3 -->|CAN_ID_DEMANDE_B| L4B
-        L3 -->|CAN_ID_DEMANDE_NUM_CARTE| L4C
+    subgraph MAIN["Boucle principale"]
+        M1{"Trame en attente ?"} -->|non| M1
+        M1 -->|oui| M2{"Quel ID ?"}
+        M2 -->|Demande de mesure| M3A["Réaliser la mesure"]
+        M2 -->|Demande d'identification| M3B["Préparer le numéro de carte"]
+        M2 -->|Commande d'actionneur| M3C["Piloter l'actionneur"]
+        M3A --> M4["Envoyer la réponse sur le bus CAN"]
+        M3B --> M4
+        M3C --> END(("Fin"))
+        M4 --> END
     end
 
-    ISR -.->|trame reçue| LOOP
+    INT -.->|trame reçue| MAIN
 ```
 
-**Pourquoi copier `rxMsg` avant de traiter ?**
-L'ISR peut être déclenchée à nouveau pendant le traitement dans `loop()`. La copie locale `rxMsgLocal` garantit que les données lues sont cohérentes même si une nouvelle trame écrase `rxMsg` entre-temps.
+L'interruption est volontairement courte (juste stocker la trame et lever un drapeau) pour ne pas bloquer la réception des trames suivantes. Le traitement réel est fait dans la boucle principale.
 
 ---
 

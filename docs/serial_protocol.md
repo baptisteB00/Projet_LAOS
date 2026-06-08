@@ -72,34 +72,23 @@ La Supervision est l'unique point d'accès série du système côté PC. Elle tr
 
 ## Algorithme générique de réception série
 
-Le principe est identique sur toutes les cartes : on accumule les caractères dans un buffer jusqu'au CR ou LF, puis on découpe la chaîne reçue en `COMMANDE` + `VALEUR` (séparées par une espace) avant d'appeler le traitement correspondant.
-
 ```mermaid
 flowchart TD
-    START["Caractère reçu sur UART"] --> BUF{"ch == CR ou LF ?"}
-    BUF -->|non| ACC["buffer += ch"]
-    ACC --> START
-    BUF -->|oui| EMPTY{"buffer vide ?"}
-    EMPTY -->|oui| RESET["buffer = """]
-    EMPTY -->|non| SPLIT["Chercher l'espace<br/>dans le buffer"]
-    SPLIT --> HAS{"Espace trouvé ?"}
-    HAS -->|non| C1["commande = buffer<br/>valeur = """]
-    HAS -->|oui| C2["commande = avant l'espace<br/>valeur = après l'espace"]
-    C1 --> DISPATCH
-    C2 --> DISPATCH
-    DISPATCH{"Dispatch sur commande"}
-    DISPATCH -->|R| A1["Émission CAN ALIMENTATION<br/>data = valeur"]
-    DISPATCH -->|M| A2["Émission CAN MÉTÉO groupée"]
-    DISPATCH -->|VI| A3["Émission CAN MESURE_VI<br/>data = valeur"]
-    DISPATCH -->|autres| A4["..."]
-    A1 --> RESET
-    A2 --> RESET
-    A3 --> RESET
-    A4 --> RESET
-    RESET --> START
+    A["Caractère reçu"] --> B{"Fin de ligne ?"}
+    B -->|non| C["Ajouter au message en cours"]
+    C --> A
+    B -->|oui| D["Séparer commande et valeur"]
+    D --> E{"Quelle commande ?"}
+    E -->|Identification| F1["Émettre demande d'identification"]
+    E -->|Mesure| F2["Émettre demande de mesure"]
+    E -->|Pilotage actionneur| F3["Émettre commande d'actionneur"]
+    F1 --> G["Réinitialiser le message"]
+    F2 --> G
+    F3 --> G
+    G --> A
 ```
 
-**Note :** sur la carte Supervision, ce traitement est déclenché par `serialEvent()` (appelé automatiquement par Arduino entre deux `loop()`). Sur les cartes esclaves, il est déclenché par le callback `Serial.onReceive()` enregistré dans `setup()`. La logique d'accumulation et de parsing est la même.
+Les caractères arrivent un à un sur la liaison série : on les accumule jusqu'à recevoir un retour à la ligne, puis on découpe la ligne complète en deux parties (la commande et sa valeur) avant d'émettre la trame CAN correspondante.
 
 ---
 
