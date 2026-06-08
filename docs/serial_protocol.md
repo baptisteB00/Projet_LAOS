@@ -90,6 +90,119 @@ flowchart TD
 
 Les caractères arrivent un à un sur la liaison série : on les accumule jusqu'à recevoir un retour à la ligne, puis on découpe la ligne complète en deux parties (la commande et sa valeur) avant d'émettre la trame CAN correspondante.
 
+### Template de code
+
+Deux variantes sont utilisées dans le projet selon la carte.
+
+#### Variante 1 – `serialEvent()` (carte Supervision)
+
+Arduino appelle `serialEvent()` automatiquement entre deux tours de `loop()` quand des octets sont disponibles. La fonction `reception()` accumule les caractères jusqu'à CR/LF, puis découpe la chaîne en `COMMANDE` et `VALEUR`.
+
+```cpp
+/* ---- Appelé automatiquement entre deux loop() ---------------------- */
+void serialEvent()
+{
+  while (Serial.available() > 0)
+  {
+    reception(Serial.read());
+  }
+}
+
+/* ---- Accumule les caractères et traite à la réception de CR/LF ----- */
+void reception(char ch)
+{
+  static String chaine = "";
+  String commande, valeur;
+
+  if (ch == '\r' || ch == '\n')
+  {
+    int index = chaine.indexOf(' ');
+
+    if (index == -1)
+    {
+      commande = chaine;
+      valeur   = "";
+    }
+    else
+    {
+      commande = chaine.substring(0, index);
+      valeur   = chaine.substring(index + 1);
+    }
+
+    if (commande == "R")
+    {
+      CAN.beginPacket(CAN_ID_DEMANDE_ALIMENTATION);
+      CAN.write(valeur.toInt());
+      CAN.endPacket();
+    }
+    else if (commande == "VI")
+    {
+      CAN.beginPacket(CAN_ID_DEMANDE_MESURE_VI);
+      CAN.write(valeur.toInt());
+      CAN.endPacket();
+    }
+    /* ... autres commandes ... */
+
+    chaine = "";
+  }
+  else
+  {
+    chaine += ch;
+  }
+}
+```
+
+#### Variante 2 – callback `Serial.onReceive()` (cartes esclaves)
+
+Utilisé sur les cartes esclaves (Météo, VI, Alimentation). Le callback est enregistré dans `setup()` et appelé à chaque réception UART.
+
+```cpp
+/* ---- setup() – enregistrement du callback série -------------------- */
+void setup()
+{
+  Serial.begin(115200);
+  Serial.onReceive(OnReceiveSerial);
+}
+
+/* ---- Callback série – même logique d'accumulation que la variante 1  */
+void OnReceiveSerial()
+{
+  String serialBuffer = "";
+
+  while (Serial.available() > 0)
+  {
+    char ch = Serial.read();
+
+    if (ch == '\r' || ch == '\n')
+    {
+      if (serialBuffer.length() > 0)
+      {
+        int    index   = serialBuffer.indexOf(' ');
+        String commande = (index == -1) ? serialBuffer
+                                        : serialBuffer.substring(0, index);
+        String valeur   = (index == -1) ? ""
+                                        : serialBuffer.substring(index + 1);
+
+        if (commande == "M") { /* action locale */ }
+        /* ... autres commandes ... */
+
+        serialBuffer = "";
+      }
+    }
+    else
+    {
+      serialBuffer += ch;
+    }
+  }
+}
+```
+
+| | `serialEvent()` | `Serial.onReceive()` |
+|---|---|---|
+| Déclenchement | Entre deux `loop()` | Interruption (callback) |
+| Utilisé sur | Carte Supervision | Cartes esclaves |
+| Buffer | Variable statique dans `reception()` | Variable locale dans le callback |
+
 ---
 
 ## Commandes de débogage local des cartes

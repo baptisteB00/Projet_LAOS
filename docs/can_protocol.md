@@ -356,6 +356,57 @@ flowchart TD
 
 L'interruption est volontairement courte (juste stocker la trame et lever un drapeau) pour ne pas bloquer la réception des trames suivantes. Le traitement réel est fait dans la boucle principale.
 
+### Template de code (patron ISR + flag)
+
+```cpp
+/* ---- Structure d'un message CAN ------------------------------------ */
+typedef struct CanMessage_t
+{
+  unsigned int  id      = 0;
+  char          len     = 0;
+  unsigned char data[8] = {0};
+} CanMessage_t;
+
+/* ---- Variables globales -------------------------------------------- */
+CanMessage_t    rxMsg;
+volatile bool   canAvailable = false;
+
+/* ---- ISR CAN – appelée à chaque trame reçue ------------------------ */
+void OnReceiveCan(int packetSize)
+{
+  rxMsg.id  = CAN.packetId();
+  rxMsg.len = CAN.packetDlc();
+  for (int i = 0; CAN.available(); i++)
+  {
+    rxMsg.data[i] = CAN.read();
+  }
+  canAvailable = true;
+}
+
+/* ---- setup() – enregistrement du callback -------------------------- */
+void setup()
+{
+  CAN.begin(10E3);
+  CAN.onReceive(OnReceiveCan);
+}
+
+/* ---- loop() – traitement hors interruption ------------------------- */
+void loop()
+{
+  if (canAvailable)
+  {
+    canAvailable = false;
+    CanMessage_t rxMsgLocal = rxMsg; // copie locale avant tout traitement
+
+    if      (rxMsgLocal.id == CAN_ID_DEMANDE_A) { /* traitement A */ }
+    else if (rxMsgLocal.id == CAN_ID_DEMANDE_B) { /* traitement B */ }
+    else if (rxMsgLocal.id == CAN_ID_DEMANDE_NUM_CARTE) { EnvoiNumCarte(); }
+  }
+}
+```
+
+La copie locale `rxMsgLocal` garantit la cohérence des données : l'ISR peut être déclenchée à nouveau pendant le traitement et écraser `rxMsg`.
+
 ---
 
 ## Numéros de cartes
