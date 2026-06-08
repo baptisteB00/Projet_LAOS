@@ -330,55 +330,34 @@ sequenceDiagram
 
 ---
 
-## Template de réception CAN (patron ISR + flag)
+## Algorithme générique de réception CAN (patron ISR + flag)
 
-Toutes les cartes esclaves utilisent le même patron : l'interruption matérielle stocke la trame et lève un drapeau ; `loop()` traite le message hors interruption.
+Toutes les cartes esclaves suivent le même schéma : l'interruption matérielle stocke la trame et lève un drapeau ; `loop()` traite le message hors interruption.
 
-```cpp
-/* ---- Structure d'un message CAN ------------------------------------ */
-typedef struct CanMessage_t
-{
-  unsigned int  id      = 0;
-  char          len     = 0;
-  unsigned char data[8] = {0};
-} CanMessage_t;
+```mermaid
+flowchart TD
+    subgraph ISR["ISR OnReceiveCan() – interruption matérielle"]
+        I1["Lire id, len, data[] depuis le contrôleur CAN"]
+        I2["Stocker dans rxMsg"]
+        I3["canAvailable = true"]
+        I1 --> I2 --> I3
+    end
 
-/* ---- Variables globales -------------------------------------------- */
-CanMessage_t    rxMsg;
-volatile bool   canAvailable = false;
+    subgraph LOOP["loop() – traitement hors interruption"]
+        L1{"canAvailable ?"}
+        L2["Copier rxMsg → rxMsgLocal<br/>canAvailable = false"]
+        L3{"Dispatch sur rxMsgLocal.id"}
+        L4A["Traitement ID A"]
+        L4B["Traitement ID B"]
+        L4C["EnvoiNumCarte()"]
+        L1 -->|non| L1
+        L1 -->|oui| L2 --> L3
+        L3 -->|CAN_ID_DEMANDE_A| L4A
+        L3 -->|CAN_ID_DEMANDE_B| L4B
+        L3 -->|CAN_ID_DEMANDE_NUM_CARTE| L4C
+    end
 
-/* ---- ISR CAN – appelée à chaque trame reçue ------------------------ */
-void OnReceiveCan(int packetSize)
-{
-  rxMsg.id  = CAN.packetId();
-  rxMsg.len = CAN.packetDlc();
-  for (int i = 0; CAN.available(); i++)
-  {
-    rxMsg.data[i] = CAN.read();
-  }
-  canAvailable = true;
-}
-
-/* ---- setup() – enregistrement du callback -------------------------- */
-void setup()
-{
-  CAN.begin(10E3);
-  CAN.onReceive(OnReceiveCan);
-}
-
-/* ---- loop() – traitement hors interruption ------------------------- */
-void loop()
-{
-  if (canAvailable)
-  {
-    canAvailable = false;
-    CanMessage_t rxMsgLocal = rxMsg; // copie locale avant tout traitement
-
-    if      (rxMsgLocal.id == CAN_ID_DEMANDE_A) { /* traitement A */ }
-    else if (rxMsgLocal.id == CAN_ID_DEMANDE_B) { /* traitement B */ }
-    else if (rxMsgLocal.id == CAN_ID_DEMANDE_NUM_CARTE) { EnvoiNumCarte(); }
-  }
-}
+    ISR -.->|trame reçue| LOOP
 ```
 
 **Pourquoi copier `rxMsg` avant de traiter ?**

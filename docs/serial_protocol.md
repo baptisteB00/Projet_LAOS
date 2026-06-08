@@ -70,122 +70,36 @@ La Supervision est l'unique point d'accès série du système côté PC. Elle tr
 
 ---
 
-## Template de réception série
+## Algorithme générique de réception série
 
-Deux variantes sont utilisées dans le projet selon la carte.
+Le principe est identique sur toutes les cartes : on accumule les caractères dans un buffer jusqu'au CR ou LF, puis on découpe la chaîne reçue en `COMMANDE` + `VALEUR` (séparées par une espace) avant d'appeler le traitement correspondant.
 
-### Variante 1 – `serialEvent()` (carte Supervision)
-
-Arduino appelle `serialEvent()` automatiquement entre deux tours de `loop()` quand des octets sont disponibles. La fonction `reception()` accumule les caractères jusqu'à CR/LF, puis découpe la chaîne en `COMMANDE` et `VALEUR`.
-
-```cpp
-/* ---- Appelé automatiquement entre deux loop() ---------------------- */
-void serialEvent()
-{
-  while (Serial.available() > 0)
-  {
-    reception(Serial.read());
-  }
-}
-
-/* ---- Accumule les caractères et traite à la réception de CR/LF ----- */
-void reception(char ch)
-{
-  static String chaine = "";
-  String commande, valeur;
-
-  if (ch == '\r' || ch == '\n')
-  {
-    int index = chaine.indexOf(' ');
-
-    if (index == -1)
-    {
-      commande = chaine;
-      valeur   = "";
-    }
-    else
-    {
-      commande = chaine.substring(0, index);
-      valeur   = chaine.substring(index + 1);
-    }
-
-    if (commande == "R")
-    {
-      CAN.beginPacket(CAN_ID_DEMANDE_ALIMENTATION);
-      CAN.write(valeur.toInt());
-      CAN.endPacket();
-    }
-    else if (commande == "VI")
-    {
-      CAN.beginPacket(CAN_ID_DEMANDE_MESURE_VI);
-      CAN.write(valeur.toInt());
-      CAN.endPacket();
-    }
-    /* ... autres commandes ... */
-
-    chaine = "";
-  }
-  else
-  {
-    chaine += ch;
-  }
-}
+```mermaid
+flowchart TD
+    START["Caractère reçu sur UART"] --> BUF{"ch == CR ou LF ?"}
+    BUF -->|non| ACC["buffer += ch"]
+    ACC --> START
+    BUF -->|oui| EMPTY{"buffer vide ?"}
+    EMPTY -->|oui| RESET["buffer = """]
+    EMPTY -->|non| SPLIT["Chercher l'espace<br/>dans le buffer"]
+    SPLIT --> HAS{"Espace trouvé ?"}
+    HAS -->|non| C1["commande = buffer<br/>valeur = """]
+    HAS -->|oui| C2["commande = avant l'espace<br/>valeur = après l'espace"]
+    C1 --> DISPATCH
+    C2 --> DISPATCH
+    DISPATCH{"Dispatch sur commande"}
+    DISPATCH -->|R| A1["Émission CAN ALIMENTATION<br/>data = valeur"]
+    DISPATCH -->|M| A2["Émission CAN MÉTÉO groupée"]
+    DISPATCH -->|VI| A3["Émission CAN MESURE_VI<br/>data = valeur"]
+    DISPATCH -->|autres| A4["..."]
+    A1 --> RESET
+    A2 --> RESET
+    A3 --> RESET
+    A4 --> RESET
+    RESET --> START
 ```
 
----
-
-### Variante 2 – callback `Serial.onReceive()` (cartes esclaves)
-
-Utilisé sur les cartes esclaves (Météo, VI, Alimentation). Le callback est enregistré dans `setup()` et appelé à chaque réception UART.
-
-```cpp
-/* ---- setup() – enregistrement du callback série -------------------- */
-void setup()
-{
-  Serial.begin(115200);
-  Serial.onReceive(OnReceiveSerial);
-}
-
-/* ---- Callback série – même logique d'accumulation que la variante 1  */
-void OnReceiveSerial()
-{
-  String serialBuffer = "";
-
-  while (Serial.available() > 0)
-  {
-    char ch = Serial.read();
-
-    if (ch == '\r' || ch == '\n')
-    {
-      if (serialBuffer.length() > 0)
-      {
-        int    index   = serialBuffer.indexOf(' ');
-        String commande = (index == -1) ? serialBuffer
-                                        : serialBuffer.substring(0, index);
-        String valeur   = (index == -1) ? ""
-                                        : serialBuffer.substring(index + 1);
-
-        if (commande == "M") { /* action locale */ }
-        /* ... autres commandes ... */
-
-        serialBuffer = "";
-      }
-    }
-    else
-    {
-      serialBuffer += ch;
-    }
-  }
-}
-```
-
-**Différence entre les deux variantes :**
-
-| | `serialEvent()` | `Serial.onReceive()` |
-|---|---|---|
-| Déclenchement | Entre deux `loop()` | Interruption (callback) |
-| Utilisé sur | Carte Supervision | Cartes esclaves |
-| Buffer | Variable statique dans `reception()` | Variable locale dans le callback |
+**Note :** sur la carte Supervision, ce traitement est déclenché par `serialEvent()` (appelé automatiquement par Arduino entre deux `loop()`). Sur les cartes esclaves, il est déclenché par le callback `Serial.onReceive()` enregistré dans `setup()`. La logique d'accumulation et de parsing est la même.
 
 ---
 
