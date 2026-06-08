@@ -330,6 +330,62 @@ sequenceDiagram
 
 ---
 
+## Template de réception CAN (patron ISR + flag)
+
+Toutes les cartes esclaves utilisent le même patron : l'interruption matérielle stocke la trame et lève un drapeau ; `loop()` traite le message hors interruption.
+
+```cpp
+/* ---- Structure d'un message CAN ------------------------------------ */
+typedef struct CanMessage_t
+{
+  unsigned int  id      = 0;
+  char          len     = 0;
+  unsigned char data[8] = {0};
+} CanMessage_t;
+
+/* ---- Variables globales -------------------------------------------- */
+CanMessage_t    rxMsg;
+volatile bool   canAvailable = false;
+
+/* ---- ISR CAN – appelée à chaque trame reçue ------------------------ */
+void OnReceiveCan(int packetSize)
+{
+  rxMsg.id  = CAN.packetId();
+  rxMsg.len = CAN.packetDlc();
+  for (int i = 0; CAN.available(); i++)
+  {
+    rxMsg.data[i] = CAN.read();
+  }
+  canAvailable = true;
+}
+
+/* ---- setup() – enregistrement du callback -------------------------- */
+void setup()
+{
+  CAN.begin(10E3);
+  CAN.onReceive(OnReceiveCan);
+}
+
+/* ---- loop() – traitement hors interruption ------------------------- */
+void loop()
+{
+  if (canAvailable)
+  {
+    canAvailable = false;
+    CanMessage_t rxMsgLocal = rxMsg; // copie locale avant tout traitement
+
+    if      (rxMsgLocal.id == CAN_ID_DEMANDE_A) { /* traitement A */ }
+    else if (rxMsgLocal.id == CAN_ID_DEMANDE_B) { /* traitement B */ }
+    else if (rxMsgLocal.id == CAN_ID_DEMANDE_NUM_CARTE) { EnvoiNumCarte(); }
+  }
+}
+```
+
+**Pourquoi copier `rxMsg` avant de traiter ?**
+L'ISR peut être déclenchée à nouveau pendant le traitement dans `loop()`. La copie locale `rxMsgLocal` garantit que les données lues sont cohérentes même si une nouvelle trame écrase `rxMsg` entre-temps.
+
+---
+
 ## Numéros de cartes
 
 | Numéro | Carte |
