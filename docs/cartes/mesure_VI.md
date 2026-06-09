@@ -93,14 +93,25 @@ flowchart TD
 
 ### Répartition logarithmique des points
 
-La distribution logarithmique concentre les points là où la courbe I-V varie le plus (aux extrémités) :
+La courbe est découpée en deux groupes. Dans chaque groupe, une grandeur reste fixe et l'autre progresse logarithmiquement.
 
-- **15 premiers points** (`i < NB_POINT_V0_CONST`) : tension fixée à V0, courant varie de V0.I vers Icc
-- **8 derniers points** (`i >= NB_POINT_V0_CONST`) : courant fixé à Icc, tension varie de Icc.V vers V0
+**Groupe 1 — tension fixée à $V_0$** ($0 \le i < N_{V_0}$, soit 15 points) :
 
-```
-courant[i] = V0.I + (Icc.I - V0.I) x log10(1 + i*9 / (NB_POINT_V0_CONST - 1))
-```
+$$I[i] = I_{V_0} + (I_{cc} - I_{V_0}) \cdot \log_{10}\!\left(1 + \frac{i \times 9}{N_{V_0} - 1}\right)$$
+
+**Groupe 2 — courant fixé à $I_{cc}$** ($N_{V_0} \le i < N_{total}$, soit 8 points) :
+
+$$V[i] = V_{cc} + (V_0 - V_{cc}) \cdot \log_{10}\!\left(1 + \frac{(i - N_{V_0}) \times 9}{N_{cc} - 1}\right)$$
+
+| Symbole | Constante | Valeur | Description |
+|:-------:|-----------|:------:|-------------|
+| $N_{V_0}$ | `NB_POINT_V0_CONST` | 15 | Nombre de points du groupe 1 |
+| $N_{cc}$ | `NB_POINT_Icc_CONST` | 8 | Nombre de points du groupe 2 |
+| $N_{total}$ | `NB_POINT` | 23 | Total de points sur la courbe |
+| $(V_0,\, I_{V_0})$ | point `alpha=0` | – | Circuit ouvert (PWM 0 %) |
+| $(V_{cc},\, I_{cc})$ | point `alpha=100` | – | Court-circuit (PWM 100 %) |
+
+Le facteur 9 est choisi pour que $\log_{10}(1 + 9) = 1$, ce qui normalise la progression entre 0 et 1 dans les deux groupes.
 
 ---
 
