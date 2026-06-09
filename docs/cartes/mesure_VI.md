@@ -117,15 +117,23 @@ Le facteur 9 est choisi pour que $\log_{10}(1 + 9) = 1$, ce qui normalise la pro
 
 ## Correction de non-linéarité
 
-Chaque carte a ses propres coefficients indexés par `numCarte - 1` :
+Les ADC de l'ESP32 présentent une non-linéarité. Chaque mesure brute est corrigée par un polynôme du second degré sans terme constant :
 
-```cpp
-tension = tensionBrute * (tensionBrute * facteurTension[numCarte-1] + constanteTension[numCarte-1]);
-courant = courantBrut  * (courantBrut  * facteurCourant[numCarte-1] + constanteCourant[numCarte-1]);
-```
+$$V = V_{brut} \cdot (a_V \cdot V_{brut} + b_V)$$
 
-| N° carte | facteurTension | constanteTension | facteurCourant | constanteCourant |
-|:--------:|:--------------:|:----------------:|:--------------:|:----------------:|
+$$I = I_{brut} \cdot (a_I \cdot I_{brut} + b_I)$$
+
+| Symbole | Variable | Rôle |
+|:-------:|----------|------|
+| $a_V$ | `facteurTension[n-1]` | Coefficient quadratique tension |
+| $b_V$ | `constanteTension[n-1]` | Coefficient linéaire tension |
+| $a_I$ | `facteurCourant[n-1]` | Coefficient quadratique courant |
+| $b_I$ | `constanteCourant[n-1]` | Coefficient linéaire courant |
+
+Les coefficients sont étalonnés individuellement pour chaque carte ($n$ = numéro de carte) :
+
+| N° carte | $a_V$ | $b_V$ | $a_I$ | $b_I$ |
+|:--------:|:-----:|:-----:|:-----:|:-----:|
 | 1 | -0.00806 | 1.13 | 0.00188 | 1.01 |
 | 2 | -0.00126 | 1.210 | -0.0154 | 1.11 |
 | 3 | -0.00847 | 1.14 | -0.0066 | 1.04 |
