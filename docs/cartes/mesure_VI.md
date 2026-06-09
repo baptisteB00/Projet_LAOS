@@ -123,10 +123,22 @@ courant = courantBrut  * (courantBrut  * facteurCourant[numCarte-1] + constanteC
 
 ---
 
-## Commandes série
+## Messages CAN traités
+
+Le filtrage par `data[0] == numCarte` s'applique aux demandes `0x300` et `0x301` : la carte ignore les messages destinés à un autre numéro de carte.
+
+| ID reçu | Nom | Condition | Action |
+|:-------:|-----|-----------|--------|
+| `0x020` | `CAN_ID_DEMANDE_NUM_CARTE` | – | Envoie `0x021` avec `data[0]=numCarte` |
+| `0x300` | `CAN_ID_DEMANDE_MESURE_VI` | `data[0]==numCarte` | Appelle `MesureCourbeVI()`, émet `0x010` + 23×`0x380` + `0x011` |
+| `0x301` | `CAN_ID_DEMANDE_TEMP_PANNEAU` | `data[0]==numCarte` | Appelle `MesureTemperatureTc74()`, émet `0x381` |
+
+---
+
+## Commandes série (débogage)
 
 | Commande | Exemple | Effet |
 |----------|---------|-------|
-| `M <alpha>` | `M 50.0` | Mesure un point I-V à alpha=50% |
-| `A` | `A` | Déclenche la courbe I-V complète |
-| `T` | `T` | Mesure la température du panneau |
+| `M <alpha>` | `M 50` | Mesure un point I-V à alpha=50 % et affiche tension/courant |
+| `A` | `A` | Déclenche la courbe I-V complète et envoie les trames CAN |
+| `T` | `T` | Mesure la température du panneau via TC74 et l'affiche |

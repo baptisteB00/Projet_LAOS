@@ -16,32 +16,40 @@ La carte ne fait **aucun traitement des données** : elle est un pur relais bidi
 
 ---
 
-## Commandes série envoyées vers le bus CAN
+## Commandes série (débogage)
+
+Ces commandes sont envoyées par le PC sur l'UART (115 200 baud) et traduites en trames CAN par la carte supervision.
 
 | Commande | Trame CAN émise | Description |
 |----------|----------------|-------------|
-| `R 1` | `0x100`, `data[0]=1` | Allume le relais alimentation |
-| `R 0` | `0x100`, `data[0]=0` | Éteint le relais alimentation |
-| `M` | `0x200` | Demande mesure météo groupée |
+| `R 1` | `0x100`, `data[0]=1` | Ferme le relais alimentation |
+| `R 0` | `0x100`, `data[0]=0` | Ouvre le relais alimentation |
+| `M` | `0x200` | Demande mesure météo groupée (hum + temp + irr) |
 | `VI <n>` | `0x300`, `data[0]=n` | Demande courbe I-V de la carte n |
 | `T <n>` | `0x301`, `data[0]=n` | Demande température panneau de la carte n |
 | `N` | `0x020` | Demande d'identification de toutes les cartes |
+| `V <n>` | `0x400`, `data[0]=n` | Demande les tensions du string n (1 à 4) |
+| `C` | `0x401` | Demande les courants des 4 strings |
 
 ---
 
-## Format des réponses renvoyées vers le PC
+## Messages CAN traités
 
-| ID CAN reçu | Format série envoyé | Signification |
-|-------------|---------------------|---------------|
-| `0x010` (DEBUT) | `"0\r\n"` | Début de séquence |
-| `0x011` (FIN) | `"99\r\n"` | Fin de séquence |
-| `0x021` (NUM_CARTE) | `"0;n\r\n"` | Carte n°n présente sur le bus |
-| `0x280` (HUM_IRR_TEMP_EXT) | `"10;H;T;I\r\n"` | Hum, Temp, Irr regroupés |
-| `0x281` (HUMIDITE) | `"11;H\r\n"` | Humidité H % |
-| `0x282` (TEMPERATURE) | `"12;T\r\n"` | Température ext. T °C |
-| `0x283` (IRRADIANCE) | `"13;I\r\n"` | Irradiance I |
-| `0x380` (MESURE_VI) | `"1;n;V;I\r\n"` | V volts, I ampères, carte n°n |
-| `0x381` (TEMP_PANNEAU) | `"2;n;T\r\n"` | Température T °C, carte n°n |
+La carte supervision reçoit les réponses des cartes esclaves et les retransmet sur le port série vers le PC.
+
+| ID CAN reçu | Nom | Format série envoyé | Signification |
+|:-----------:|-----|---------------------|---------------|
+| `0x010` | `CAN_ID_DEBUT_TRANSMISSION` | `"0\r\n"` | Début de rafale multi-trames |
+| `0x011` | `CAN_ID_FIN_TRANSMISSION` | `"9999\r\n"` | Fin de rafale multi-trames |
+| `0x021` | `CAN_ID_RENVOI_NUM_CARTE` | `"0;n\r\n"` | Carte n°n présente sur le bus |
+| `0x280` | `CAN_ID_RENVOI_HUM_IRR_TEMP_EXT` | `"10;H;T;I\r\n"` | Hum (%), Temp (°C), Irr groupés |
+| `0x281` | `CAN_ID_RENVOI_HUMIDITE` | `"11;H\r\n"` | Humidité H % |
+| `0x282` | `CAN_ID_RENVOI_TEMPERATURE` | `"12;T\r\n"` | Température ext. T °C |
+| `0x283` | `CAN_ID_RENVOI_IRRADIANCE` | `"13;I\r\n"` | Irradiance I |
+| `0x380` | `CAN_ID_RENVOI_MESURE_VI` | `"1;n;V;I\r\n"` | V (V), I (A), carte n°n |
+| `0x381` | `CAN_ID_RENVOI_TEMP_PANNEAU` | `"2;n;T\r\n"` | Température T °C, carte n°n |
+| `0x480` | `CAN_ID_RENVOI_TENSION_STRING` | `"20;s;p;V\r\n"` | Tension V (V), string s, panneau p |
+| `0x481` | `CAN_ID_RENVOI_COURANT_STRING` | `"21;I1;I2;I3;I4\r\n"` | Courants des 4 strings (A) |
 
 ---
 

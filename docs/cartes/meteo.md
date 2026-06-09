@@ -60,6 +60,26 @@ data[1] = humidityInt % 256;   // octet faible
 
 ---
 
+## Messages CAN traités
+
+| ID reçu | Nom | Action |
+|:-------:|-----|--------|
+| `0x020` | `CAN_ID_DEMANDE_NUM_CARTE` | Envoie `0x021` avec `data[0]=10` |
+| `0x200` | `CAN_ID_DEMANDE_HUM_IRR_TEMP_EXT` | Appelle `MesureHumiditeTemperatureIrradiance()`, émet `0x280` |
+| `0x201` | `CAN_ID_DEMANDE_HUMIDITE` | Appelle `MesureHumidite()`, émet `0x281` |
+| `0x202` | `CAN_ID_DEMANDE_TEMP_EXTERIEUR` | Appelle `MesureTemperature()`, émet `0x282` |
+| `0x203` | `CAN_ID_DEMANDE_IRRADIANCE` | Appelle `MesureIrradiance()`, émet `0x283` |
+
+---
+
+## Commandes série (débogage)
+
+| Commande | Effet |
+|----------|-------|
+| `M` | Déclenche une mesure groupée (humidité + température + irradiance) et envoie les trames CAN `0x280`, `0x281`, `0x282`, `0x283` |
+
+---
+
 ## Format du message groupé (`0x280`)
 
 | Octets | Contenu | Encodage |
